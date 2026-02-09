@@ -25,6 +25,10 @@
 * [Export](v1/export.md)
 * [Backups](v1/backups.md)
 
+## MCP <a href="#mcp" id="mcp"></a>
+
+* [MCP Server](mcp/README.md)
+
 ## More
 
 * [Changelog](more/changelog.md)
