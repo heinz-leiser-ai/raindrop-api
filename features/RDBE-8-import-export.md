@@ -1,8 +1,11 @@
 # RDBE-8: Import / Export
 
-## Status: Planned
+## Status: Backend Done
 **Created:** 2026-03-13  
 **Last Updated:** 2026-03-13
+
+### Backend-Dateien
+- `supabase/functions/api/routes/import-export.ts` – Import/Export Endpunkte
 
 ## Dependencies
 - RDBE-1

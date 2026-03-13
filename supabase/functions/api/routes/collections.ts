@@ -47,10 +47,27 @@ export async function handleCollectionRoutes(req: Request, path: string): Promis
     return await getLastAction(req, service, userId, parseInt(lastActionMatch[1]))
   }
 
-  // collection/{id}/sharing (stub)
-  const sharingMatch = path.match(/^collection\/(-?\d+)\/sharing/)
+  // collection/{id}/sharing/{userId}
+  const sharingUserMatch = path.match(/^collection\/(\d+)\/sharing\/(\d+)$/)
+  if (sharingUserMatch) {
+    const cId = parseInt(sharingUserMatch[1])
+    const targetUserId = parseInt(sharingUserMatch[2])
+    if (req.method === 'PUT') return await updateSharingUser(req, service, userId, cId, targetUserId)
+    if (req.method === 'DELETE') return await removeSharingUser(req, service, userId, cId, targetUserId)
+  }
+
+  // collection/{id}/sharing
+  const sharingMatch = path.match(/^collection\/(\d+)\/sharing$/)
   if (sharingMatch) {
-    return jsonResponse({ result: true, items: [] }, req)
+    const cId = parseInt(sharingMatch[1])
+    if (req.method === 'GET') return await getSharingList(req, service, userId, cId)
+    if (req.method === 'POST') return await createSharingInvite(req, service, userId, cId)
+    if (req.method === 'DELETE') return await unshareCollection(req, service, userId, cId)
+  }
+
+  // collaborators/join?token=
+  if (path === 'collaborators/join' && req.method === 'GET') {
+    return await joinByToken(req, service, userId)
   }
 
   // PUT collection/{id}/cover
@@ -480,6 +497,136 @@ async function uploadCollectionCover(
 
   return jsonResponse({ result: true, item: formatCollection(data, userId) }, req)
 }
+
+// ─── Sharing ─────────────────────────────────────────────
+
+async function getSharingList(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  collectionId: number
+): Promise<Response> {
+  const { data } = await service
+    .from('collection_sharing')
+    .select('user_id, role, created_at')
+    .eq('collection_id', collectionId)
+    .not('user_id', 'is', null)
+
+  const items = (data ?? []).map((s) => ({
+    _id: s.user_id,
+    role: s.role,
+    joined: s.created_at,
+  }))
+
+  return jsonResponse({ result: true, items }, req)
+}
+
+async function createSharingInvite(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  collectionId: number
+): Promise<Response> {
+  const body = await req.json()
+  const role = body.role ?? 'viewer'
+  const token = crypto.randomUUID()
+
+  const { error } = await service
+    .from('collection_sharing')
+    .insert({ collection_id: collectionId, role, token })
+
+  if (error) return errorResponse(req, 400, 'invite_failed', error.message)
+
+  const siteUrl = Deno.env.get('SITE_URL') ?? 'http://localhost:3000'
+  const link = `${siteUrl}/app/invite/${token}`
+
+  return jsonResponse({ result: true, link, token }, req)
+}
+
+async function updateSharingUser(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  collectionId: number,
+  targetUserId: number
+): Promise<Response> {
+  const body = await req.json()
+  const updates: Record<string, unknown> = {}
+  if (body.role !== undefined) updates.role = body.role
+
+  const { error } = await service
+    .from('collection_sharing')
+    .update(updates)
+    .eq('collection_id', collectionId)
+    .eq('user_id', targetUserId)
+
+  if (error) return errorResponse(req, 400, 'update_failed', error.message)
+
+  return jsonResponse({ result: true }, req)
+}
+
+async function removeSharingUser(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  _userId: number,
+  collectionId: number,
+  targetUserId: number
+): Promise<Response> {
+  const { error } = await service
+    .from('collection_sharing')
+    .delete()
+    .eq('collection_id', collectionId)
+    .eq('user_id', targetUserId)
+
+  if (error) return errorResponse(req, 400, 'remove_failed', error.message)
+
+  return jsonResponse({ result: true }, req)
+}
+
+async function unshareCollection(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  _userId: number,
+  collectionId: number
+): Promise<Response> {
+  const { error } = await service
+    .from('collection_sharing')
+    .delete()
+    .eq('collection_id', collectionId)
+
+  if (error) return errorResponse(req, 400, 'unshare_failed', error.message)
+
+  return jsonResponse({ result: true }, req)
+}
+
+async function joinByToken(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number
+): Promise<Response> {
+  const url = new URL(req.url)
+  const token = url.searchParams.get('token')
+  if (!token) return errorResponse(req, 400, 'missing_token', 'Token required')
+
+  const { data: invite } = await service
+    .from('collection_sharing')
+    .select('id, collection_id, role')
+    .eq('token', token)
+    .is('user_id', null)
+    .single()
+
+  if (!invite) return errorResponse(req, 400, 'invalid_token', 'Invite token is invalid or already used')
+
+  // Claim the invite
+  await service
+    .from('collection_sharing')
+    .update({ user_id: userId, token: null })
+    .eq('id', invite.id)
+
+  return jsonResponse({ result: true, cId: invite.collection_id }, req)
+}
+
+// ─── Helpers ─────────────────────────────────────────────
 
 async function getDescendantIds(
   service: ReturnType<typeof createServiceClient>,

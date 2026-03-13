@@ -185,7 +185,6 @@ async function updateRaindrop(
   if (body.important !== undefined) updates.important = body.important
   if (body.order !== undefined) updates.order = body.order
   if (body.removed !== undefined) updates.removed = body.removed
-  if (body.highlights !== undefined) updates.highlights = body.highlights
   if (body.reminder !== undefined) updates.reminder = body.reminder
   if (body.file !== undefined) updates.file = body.file
   if (body.pleaseParse !== undefined) updates.pleaseParse = body.pleaseParse
@@ -196,6 +195,42 @@ async function updateRaindrop(
   }
   if (body['collection.$id'] !== undefined) {
     updates.collection_id = body['collection.$id']
+  }
+
+  // Highlights merge logic: add/update/remove based on _id and text fields
+  if (body.highlights !== undefined) {
+    const incoming = body.highlights as Record<string, unknown>[]
+    const { data: existing } = await service
+      .from('raindrops')
+      .select('highlights')
+      .eq('_id', id)
+      .eq('user_id', userId)
+      .single()
+
+    let current = ((existing?.highlights ?? []) as Record<string, unknown>[])
+
+    for (const h of incoming) {
+      if (h._id) {
+        if (h.text === '') {
+          // Remove
+          current = current.filter((c) => c._id !== h._id)
+        } else {
+          // Update
+          current = current.map((c) =>
+            c._id === h._id ? { ...c, ...h, lastUpdate: new Date().toISOString() } : c
+          )
+        }
+      } else {
+        // Add
+        current.push({
+          ...h,
+          _id: crypto.randomUUID(),
+          created: new Date().toISOString(),
+          lastUpdate: new Date().toISOString(),
+        })
+      }
+    }
+    updates.highlights = current
   }
 
   if (Object.keys(updates).length === 0) {

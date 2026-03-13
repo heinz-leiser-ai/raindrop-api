@@ -5,6 +5,8 @@ import { handleUserRoutes } from './routes/user.ts'
 import { handleCollectionRoutes } from './routes/collections.ts'
 import { handleRaindropRoutes } from './routes/raindrops.ts'
 import { handleTagRoutes } from './routes/tags.ts'
+import { handleImportExportRoutes } from './routes/import-export.ts'
+import { handleHighlightRoutes } from './routes/highlights.ts'
 
 Deno.serve(async (req) => {
   const corsResponse = handleCors(req)
@@ -22,8 +24,16 @@ Deno.serve(async (req) => {
       return await handleUserRoutes(req, path)
     }
 
-    if (path.startsWith('collection')) {
+    if (path.startsWith('collection') || path.startsWith('collaborators/')) {
       return await handleCollectionRoutes(req, path)
+    }
+
+    if (path.startsWith('highlights')) {
+      return await handleHighlightRoutes(req, path)
+    }
+
+    if (path.startsWith('import/') && !path.startsWith('import/url/parse')) {
+      return await handleImportExportRoutes(req, path)
     }
 
     if (path.startsWith('raindrop') || path.startsWith('import/url/parse')) {
@@ -32,6 +42,11 @@ Deno.serve(async (req) => {
 
     if (path.startsWith('tag') || path.startsWith('filter')) {
       return await handleTagRoutes(req, path)
+    }
+
+    // Export: raindrops/{id}/export.{format} - handled by import-export router
+    if (path.match(/^raindrops\/.*\/export\./)) {
+      return await handleImportExportRoutes(req, path)
     }
 
     return errorResponse(req, 404, 'not_found', `Route not found: ${path}`)

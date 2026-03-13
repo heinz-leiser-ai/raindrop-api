@@ -1,8 +1,12 @@
 # RDBE-9: Highlights
 
-## Status: Planned
+## Status: Backend Done
 **Created:** 2026-03-13  
 **Last Updated:** 2026-03-13
+
+### Backend-Dateien
+- `supabase/functions/api/routes/highlights.ts` – GET highlights + GET highlights/{collectionId}
+- `supabase/functions/api/routes/raindrops.ts` – Highlights Merge/Add/Remove Logik in updateRaindrop
 
 ## Dependencies
 - RDBE-1

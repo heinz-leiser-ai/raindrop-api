@@ -1,8 +1,12 @@
 # RDBE-10: Collection Sharing & Kollaboration
 
-## Status: Planned
+## Status: Backend Done
 **Created:** 2026-03-13  
 **Last Updated:** 2026-03-13
+
+### Backend-Dateien
+- `supabase/migrations/20260313000006_sharing.sql` – collection_sharing Tabelle + RLS
+- `supabase/functions/api/routes/collections.ts` – Sharing Endpunkte (list, invite, update, remove, unshare, join)
 
 ## Dependencies
 - RDBE-1
