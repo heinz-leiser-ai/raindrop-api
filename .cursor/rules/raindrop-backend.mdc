@@ -1,0 +1,38 @@
+---
+description: Projektregel fuer self-hosted Raindrop-kompatibles Supabase Backend
+alwaysApply: true
+---
+
+# Projektregel
+
+## Ziel
+- Baue ein self-hosted Backend fuer den privaten Familienbetrieb auf eigenem Server.
+- Das bestehende Frontend (`raindrop-app` Fork) soll ohne grosse UI-Umbauten nutzbar sein.
+
+## Stack
+- Datenbank: PostgreSQL (Supabase)
+- Auth: Supabase Auth (Email/Password + OAuth Provider)
+- Storage: Supabase Storage fuer Dateien/Cover/Import-Dateien
+- API-Schicht: Edge Functions als `v1`-kompatible REST-Fassade
+
+## API-Kompatibilitaet
+- Endpunkte und Antwortformate muessen mit den im Frontend genutzten Calls kompatibel sein.
+- Response-Huelle standardisieren: `result`, `item`, `items`, `error`, `errorMessage`.
+- Session/Cookie-Flow mit `credentials: include` unterstuetzen.
+- CORS fuer Frontend-Domain(s) korrekt konfigurieren.
+
+## Scope
+- In Scope: Backend-only (kein neues Frontend, kein Mobile-Neubau).
+- In Scope: Multi-User fuer kleine private Gruppe/Familie.
+- Out of Scope (MVP): AI/Stella, oeffentliche Registrierung fuer alle.
+
+## Daten- und Sicherheitsregeln
+- Datenhaltung auf eigener Infrastruktur priorisieren.
+- RLS fuer alle nutzerbezogenen Tabellen erzwingen.
+- Zugriff auf Objekte strikt mandantenfaehig (`owner_user_id` / Membership).
+- Uploads nur authentifiziert und mit Dateityp-/Groessenlimits.
+
+## Arbeitskonventionen
+- Features als einzelne, testbare Einheiten spezifizieren (Single Responsibility).
+- Erst P0 sauber definieren, dann P1/P2.
+- Unklarheiten immer als **Annahme** markieren.
