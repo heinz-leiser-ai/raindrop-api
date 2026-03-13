@@ -53,6 +53,12 @@ export async function handleCollectionRoutes(req: Request, path: string): Promis
     return jsonResponse({ result: true, items: [] }, req)
   }
 
+  // PUT collection/{id}/cover
+  const coverMatch = path.match(/^collection\/(-?\d+)\/cover$/)
+  if (coverMatch && req.method === 'PUT') {
+    return await uploadCollectionCover(req, service, userId, user.id, parseInt(coverMatch[1]))
+  }
+
   // collection/{id}
   const idMatch = path.match(/^collection\/(-?\d+)$/)
   if (idMatch) {
@@ -422,6 +428,57 @@ async function getLastAction(
     lastAction: new Date().toISOString(),
     version: 1,
   }, req)
+}
+
+async function uploadCollectionCover(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  authUid: string,
+  collectionId: number
+): Promise<Response> {
+  const formData = await req.formData().catch(() => null)
+  if (!formData) return errorResponse(req, 400, '-1', 'no file')
+
+  const file = formData.get('cover') as File | null
+  if (!file) return errorResponse(req, 400, '-1', 'no file')
+
+  const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+  if (!allowedTypes.includes(file.type)) {
+    return errorResponse(req, 400, 'file_invalid', 'File is invalid')
+  }
+
+  if (file.size > 10 * 1024 * 1024) {
+    return errorResponse(req, 400, 'file_size_limit', 'File size limit')
+  }
+
+  const ext = file.name.split('.').pop() ?? 'jpg'
+  const storagePath = `${authUid}/collection-${collectionId}.${ext}`
+
+  const { error: uploadError } = await service.storage
+    .from('raindrop-covers')
+    .upload(storagePath, file, { contentType: file.type, upsert: true })
+
+  if (uploadError) {
+    return errorResponse(req, 400, 'file_invalid', uploadError.message)
+  }
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+  const coverUrl = `${supabaseUrl}/storage/v1/object/public/raindrop-covers/${storagePath}`
+
+  const { data, error } = await service
+    .from('collections')
+    .update({ cover: [coverUrl] })
+    .eq('_id', collectionId)
+    .eq('user_id', userId)
+    .select()
+    .single()
+
+  if (error || !data) {
+    return errorResponse(req, 400, 'update_failed', error?.message ?? 'Collection not found')
+  }
+
+  return jsonResponse({ result: true, item: formatCollection(data, userId) }, req)
 }
 
 async function getDescendantIds(

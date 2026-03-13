@@ -1,8 +1,13 @@
 # RDBE-7: File Upload (Supabase Storage)
 
-## Status: Planned
+## Status: Backend Done
 **Created:** 2026-03-13  
 **Last Updated:** 2026-03-13
+
+### Backend-Dateien
+- `supabase/migrations/20260313000005_storage_buckets.sql` – Storage Buckets + RLS Policies
+- `supabase/functions/api/routes/raindrops.ts` – PUT raindrop/file + PUT raindrop/{id}/cover
+- `supabase/functions/api/routes/collections.ts` – PUT collection/{id}/cover
 
 ## Dependencies
 - RDBE-1
@@ -38,7 +43,17 @@
 <!-- Sections below are added by subsequent skills -->
 
 ## Tech Design (Solution Architect)
-_To be added by /architecture_
+
+### Storage-Architektur
+
+- **raindrop-files** Bucket (privat): Hochgeladene Dateien als Bookmarks. Zugriff nur fuer Owner.
+- **raindrop-covers** Bucket (public read): Cover-Bilder fuer Raindrops und Collections. Public lesbar.
+- Dateipfad-Schema: `{auth_uid}/{id_or_uuid}.{ext}`
+
+### Limits
+- Dateien: max 100MB
+- Covers: max 10MB, nur PNG/JPEG/GIF/WEBP
+- Storage-Policies pruefen `auth.uid()` im Ordnernamen
 
 ## QA Test Results
 _To be added by /qa_

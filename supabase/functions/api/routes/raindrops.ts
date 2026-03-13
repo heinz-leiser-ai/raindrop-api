@@ -27,13 +27,13 @@ export async function handleRaindropRoutes(req: Request, path: string): Promise<
 
   // PUT raindrop/file
   if (path === 'raindrop/file' && req.method === 'PUT') {
-    return errorResponse(req, 501, 'not_implemented', 'File upload not yet available')
+    return await uploadRaindropFile(req, service, userId, user.id)
   }
 
   // PUT raindrop/{id}/cover
   const coverMatch = path.match(/^raindrop\/(\d+)\/cover$/)
   if (coverMatch && req.method === 'PUT') {
-    return errorResponse(req, 501, 'not_implemented', 'Cover upload not yet available')
+    return await uploadRaindropCover(req, service, userId, user.id, parseInt(coverMatch[1]))
   }
 
   // GET raindrop/{id}/cache
@@ -552,6 +552,118 @@ function extractMeta(html: string, property: string): string | null {
 function extractTagContent(html: string, tag: string): string | null {
   const match = html.match(new RegExp(`<${tag}[^>]*>([^<]+)</${tag}>`, 'i'))
   return match ? match[1].trim() : null
+}
+
+// ─── File Upload ─────────────────────────────────────────
+
+const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
+const MAX_COVER_SIZE = 10 * 1024 * 1024 // 10MB
+const ALLOWED_COVER_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+
+async function uploadRaindropFile(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  authUid: string
+): Promise<Response> {
+  const formData = await req.formData().catch(() => null)
+  if (!formData) return errorResponse(req, 400, '-1', 'no file')
+
+  const file = formData.get('file') as File | null
+  if (!file) return errorResponse(req, 400, '-1', 'no file')
+
+  if (file.size > MAX_FILE_SIZE) {
+    return errorResponse(req, 400, 'file_size_limit', 'File size limit')
+  }
+
+  const collectionId = parseInt(formData.get('collectionId') as string) || -1
+  const ext = file.name.split('.').pop() ?? ''
+  const storagePath = `${authUid}/${crypto.randomUUID()}.${ext}`
+
+  const { error: uploadError } = await service.storage
+    .from('raindrop-files')
+    .upload(storagePath, file, { contentType: file.type, upsert: false })
+
+  if (uploadError) {
+    return errorResponse(req, 400, 'file_invalid', uploadError.message)
+  }
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+  const fileUrl = `${supabaseUrl}/storage/v1/object/raindrop-files/${storagePath}`
+  const fileType = detectType(file.name)
+
+  const { data: raindrop, error: createError } = await service
+    .from('raindrops')
+    .insert({
+      user_id: userId,
+      link: fileUrl,
+      title: file.name.replace(/\.[^.]+$/, ''),
+      type: fileType,
+      collection_id: collectionId,
+      domain: 'upload',
+      file: { name: file.name, size: file.size, type: file.type },
+    })
+    .select()
+    .single()
+
+  if (createError) {
+    return errorResponse(req, 400, 'create_failed', createError.message)
+  }
+
+  return jsonResponse({ result: true, item: formatRaindrop(raindrop) }, req)
+}
+
+async function uploadRaindropCover(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  authUid: string,
+  raindropId: number
+): Promise<Response> {
+  const formData = await req.formData().catch(() => null)
+  if (!formData) return errorResponse(req, 400, '-1', 'no file')
+
+  const file = formData.get('cover') as File | null
+  if (!file) return errorResponse(req, 400, '-1', 'no file')
+
+  if (!ALLOWED_COVER_TYPES.includes(file.type)) {
+    return errorResponse(req, 400, 'file_invalid', 'File is invalid')
+  }
+
+  if (file.size > MAX_COVER_SIZE) {
+    return errorResponse(req, 400, 'file_size_limit', 'File size limit')
+  }
+
+  const ext = file.name.split('.').pop() ?? 'jpg'
+  const storagePath = `${authUid}/${raindropId}.${ext}`
+
+  const { error: uploadError } = await service.storage
+    .from('raindrop-covers')
+    .upload(storagePath, file, { contentType: file.type, upsert: true })
+
+  if (uploadError) {
+    return errorResponse(req, 400, 'file_invalid', uploadError.message)
+  }
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+  const coverUrl = `${supabaseUrl}/storage/v1/object/public/raindrop-covers/${storagePath}`
+
+  const { data, error } = await service
+    .from('raindrops')
+    .update({
+      cover: coverUrl,
+      media: [{ link: coverUrl }],
+    })
+    .eq('_id', raindropId)
+    .eq('user_id', userId)
+    .select()
+    .single()
+
+  if (error || !data) {
+    return errorResponse(req, 400, 'update_failed', error?.message ?? 'Raindrop not found')
+  }
+
+  return jsonResponse({ result: true, item: formatRaindrop(data) }, req)
 }
 
 // ─── Recent Searches ─────────────────────────────────────
