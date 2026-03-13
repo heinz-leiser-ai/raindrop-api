@@ -56,6 +56,12 @@ export async function handleRaindropRoutes(req: Request, path: string): Promise<
     return await createRaindrop(req, service, userId)
   }
 
+  // GET/DEL raindrops/recent/search
+  if (path === 'raindrops/recent/search') {
+    if (req.method === 'GET') return await getRecentSearches(req, service, userId)
+    if (req.method === 'DELETE') return await clearRecentSearches(req, service, userId)
+  }
+
   // POST raindrops (batch create)
   if (path === 'raindrops' && req.method === 'POST') {
     return await batchCreateRaindrops(req, service, userId)
@@ -273,6 +279,11 @@ async function listRaindrops(
     query = query.in('collection_id', [collectionId, ...childIds])
   } else {
     query = query.eq('collection_id', collectionId)
+  }
+
+  // Save search to recent (fire and forget)
+  if (search) {
+    service.from('recent_searches').insert({ user_id: userId, query: search }).then(() => {})
   }
 
   // Search
@@ -542,6 +553,43 @@ function extractTagContent(html: string, tag: string): string | null {
   const match = html.match(new RegExp(`<${tag}[^>]*>([^<]+)</${tag}>`, 'i'))
   return match ? match[1].trim() : null
 }
+
+// ─── Recent Searches ─────────────────────────────────────
+
+async function getRecentSearches(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number
+): Promise<Response> {
+  const { data } = await service
+    .from('recent_searches')
+    .select('query, created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  const items = (data ?? []).map((r) => ({
+    query: r.query,
+    created: r.created_at,
+  }))
+
+  return jsonResponse({ result: true, items }, req)
+}
+
+async function clearRecentSearches(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number
+): Promise<Response> {
+  const { count } = await service
+    .from('recent_searches')
+    .delete()
+    .eq('user_id', userId)
+
+  return jsonResponse({ result: true, modified: count ?? 0 }, req)
+}
+
+// ─── Helpers ─────────────────────────────────────────────
 
 async function getCollectionDescendantIds(
   service: ReturnType<typeof createServiceClient>,

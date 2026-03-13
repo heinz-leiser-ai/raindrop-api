@@ -1,8 +1,14 @@
 # RDBE-6: Suche & Filter
 
-## Status: Planned
+## Status: Backend Done
 **Created:** 2026-03-13  
 **Last Updated:** 2026-03-13
+
+### Backend-Dateien
+- `supabase/functions/api/routes/raindrops.ts` – Listing mit Search/Sort/Page/Nested + Recent Searches
+- `supabase/functions/api/routes/tags.ts` – Filters-Endpoint (Tags, Types, Domains)
+- `supabase/functions/api/routes/collections.ts` – lastAction Freshness-Check
+- `supabase/migrations/20260313000004_recent_searches.sql` – Recent Searches Tabelle
 
 ## Dependencies
 - RDBE-1
@@ -39,7 +45,18 @@
 <!-- Sections below are added by subsequent skills -->
 
 ## Tech Design (Solution Architect)
-_To be added by /architecture_
+
+### Architektur-Entscheid
+
+Suche und Filter sind ueber mehrere bestehende Route-Handler verteilt (keine eigene Datei noetig):
+
+- **Volltextsuche**: Postgres `tsvector` in `raindrops` (gewichtet: title A, excerpt B, note C, domain D)
+- **Operatoren**: `#tag`, `type:xxx`, `domain:xxx`, `important:true/false`, Freitext
+- **Sortierung**: `-created`, `created`, `score`, `-sort`, `title`, `-title`, `domain`, `-domain`
+- **Pagination**: Offset-basiert (`page * perpage`, max 50)
+- **Filters**: Aggregation aus `raindrops` → Tags, Types, Domains, Important-Count
+- **Freshness**: `collection/{id}/lastAction` liefert Timestamp
+- **Recent Searches**: Eigene Tabelle, wird bei jeder Suche automatisch befuellt
 
 ## QA Test Results
 _To be added by /qa_
