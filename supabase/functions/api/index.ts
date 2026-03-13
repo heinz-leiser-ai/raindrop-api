@@ -4,6 +4,7 @@ import { handleAuthRoutes } from './routes/auth.ts'
 import { handleUserRoutes } from './routes/user.ts'
 import { handleCollectionRoutes } from './routes/collections.ts'
 import { handleRaindropRoutes } from './routes/raindrops.ts'
+import { handleTagRoutes } from './routes/tags.ts'
 
 Deno.serve(async (req) => {
   const corsResponse = handleCors(req)
@@ -27,6 +28,10 @@ Deno.serve(async (req) => {
 
     if (path.startsWith('raindrop') || path.startsWith('import/url/parse')) {
       return await handleRaindropRoutes(req, path)
+    }
+
+    if (path.startsWith('tag') || path.startsWith('filter')) {
+      return await handleTagRoutes(req, path)
     }
 
     return errorResponse(req, 404, 'not_found', `Route not found: ${path}`)

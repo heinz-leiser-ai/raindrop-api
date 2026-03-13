@@ -1,8 +1,12 @@
 # RDBE-5: Tags
 
-## Status: Planned
+## Status: Backend Done
 **Created:** 2026-03-13  
 **Last Updated:** 2026-03-13
+
+### Backend-Dateien
+- `supabase/functions/api/routes/tags.ts` – Tags + Filters Endpunkte
+- `supabase/functions/api/index.ts` – Router (erweitert)
 
 ## Dependencies
 - RDBE-1
@@ -37,7 +41,27 @@
 <!-- Sections below are added by subsequent skills -->
 
 ## Tech Design (Solution Architect)
-_To be added by /architecture_
+
+### Architektur-Entscheid
+
+Tags werden nicht in einer eigenen Tabelle gespeichert, sondern direkt aus der `raindrops.tags`-Spalte (TEXT[]) aggregiert. Rename/Delete-Operationen aktualisieren die betroffenen Raindrops direkt.
+
+### Endpunkt-Zuordnung
+
+```
+Frontend-Call                              -> Edge Function Route
+-----------------------------------------------------------------
+GET  tags/{collectionId}                   -> v1/tags/{collectionId}
+PUT  tags/{collectionId}                   -> v1/tags/{collectionId} (rename/merge)
+DEL  tags/{collectionId}                   -> v1/tags/{collectionId} (bulk remove)
+DEL  tag?tag=name                          -> v1/tag?tag=name (single remove)
+GET  tags/recent                           -> v1/tags/recent
+GET  filters/{collectionId}?params         -> v1/filters/{collectionId}
+```
+
+### Datenmodell
+
+Kein eigenes Schema. Tags leben als `TEXT[]` Array in der `raindrops`-Tabelle mit GIN-Index fuer performante `@>` (contains) Abfragen.
 
 ## QA Test Results
 _To be added by /qa_
