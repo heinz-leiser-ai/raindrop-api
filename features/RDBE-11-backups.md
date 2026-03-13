@@ -1,8 +1,12 @@
 # RDBE-11: Backups
 
-## Status: Planned
+## Status: Backend Done
 **Created:** 2026-03-13  
 **Last Updated:** 2026-03-13
+
+### Backend-Dateien
+- `supabase/migrations/20260313000007_backups.sql` – Backups Tabelle + RLS
+- `supabase/functions/api/routes/backups.ts` – List, Create, Download Endpunkte
 
 ## Dependencies
 - RDBE-1

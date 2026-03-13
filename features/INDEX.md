@@ -16,7 +16,7 @@
 | RDBE-8  | Import / Export             | P1       | Backend Done | `v1/import.md`, `v1/export.md`, `src/data/sagas/import.js`           | Daten importieren/exportieren fuer Migration          |
 | RDBE-9  | Highlights                  | P1       | Backend Done | `v1/highlights.md`, `src/data/sagas/bookmarks/highlights.js`         | Highlights speichern und abrufen                      |
 | RDBE-10 | Sharing & Collaboration     | P1       | Backend Done | `v1/collections/sharing.md`, `src/data/sagas/collections/sharing.js` | Collections teilen, Nutzerrollen, Join-Token          |
-| RDBE-11 | Backups                     | P1       | Planned | `v1/backups.md`, `src/data/sagas/backups.js`                         | Backup-Objekte erzeugen und abrufen                   |
+| RDBE-11 | Backups                     | P1       | Backend Done | `v1/backups.md`, `src/data/sagas/backups.js`                         | Backup-Objekte erzeugen und abrufen                   |
 
 
 ## Empfohlene Build-Reihenfolge

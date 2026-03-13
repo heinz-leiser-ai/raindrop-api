@@ -7,6 +7,7 @@ import { handleRaindropRoutes } from './routes/raindrops.ts'
 import { handleTagRoutes } from './routes/tags.ts'
 import { handleImportExportRoutes } from './routes/import-export.ts'
 import { handleHighlightRoutes } from './routes/highlights.ts'
+import { handleBackupRoutes } from './routes/backups.ts'
 
 Deno.serve(async (req) => {
   const corsResponse = handleCors(req)
@@ -42,6 +43,10 @@ Deno.serve(async (req) => {
 
     if (path.startsWith('tag') || path.startsWith('filter')) {
       return await handleTagRoutes(req, path)
+    }
+
+    if (path.startsWith('backup')) {
+      return await handleBackupRoutes(req, path)
     }
 
     // Export: raindrops/{id}/export.{format} - handled by import-export router
