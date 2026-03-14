@@ -24,12 +24,23 @@ export async function handleAuthRoutes(req: Request, path: string): Promise<Resp
   }
 }
 
+async function parseBody(req: Request): Promise<Record<string, string>> {
+  const contentType = (req.headers.get('content-type') ?? '').toLowerCase()
+  if (contentType.includes('application/json')) {
+    return await req.json()
+  }
+  const text = await req.text()
+  return Object.fromEntries(new URLSearchParams(text))
+}
+
 async function emailLogin(req: Request): Promise<Response> {
   if (req.method !== 'POST') {
     return errorResponse(req, 405, 'method_not_allowed')
   }
 
-  const { email, password } = await req.json()
+  const body = await parseBody(req)
+  const email = body.email
+  const password = body.password
   if (!email || !password) {
     return errorResponse(req, 400, 'missing_fields', 'Email and password required')
   }
@@ -38,6 +49,17 @@ async function emailLogin(req: Request): Promise<Response> {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password })
 
   if (error) {
+    const ct = (req.headers.get('content-type') ?? '').toLowerCase()
+    if (!ct.includes('application/json')) {
+      const siteUrl = Deno.env.get('SITE_URL') ?? 'http://localhost:2000'
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: `${siteUrl}/account/login?error=${encodeURIComponent(error.message)}`,
+          ...corsHeaders(req.headers.get('origin')),
+        },
+      })
+    }
     return errorResponse(req, 401, 'unauthorized', error.message)
   }
 
@@ -52,14 +74,25 @@ async function emailLogin(req: Request): Promise<Response> {
     const domain = Deno.env.get('COOKIE_DOMAIN') ?? ''
     const domainAttr = domain ? `; Domain=${domain}` : ''
 
+    const sameSite = Deno.env.get('COOKIE_SAMESITE') ?? 'None'
     headers.append(
       'Set-Cookie',
-      `sb-access-token=${data.session.access_token}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}${domainAttr}; Max-Age=${data.session.expires_in}`
+      `sb-access-token=${data.session.access_token}; Path=/; HttpOnly; SameSite=${sameSite}${sameSite === 'None' ? '; Secure' : (secure ? '; Secure' : '')}${domainAttr}; Max-Age=${data.session.expires_in}`
     )
     headers.append(
       'Set-Cookie',
-      `sb-refresh-token=${data.session.refresh_token}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}${domainAttr}; Max-Age=604800`
+      `sb-refresh-token=${data.session.refresh_token}; Path=/; HttpOnly; SameSite=${sameSite}${sameSite === 'None' ? '; Secure' : (secure ? '; Secure' : '')}${domainAttr}; Max-Age=604800`
     )
+  }
+
+  const contentType = (req.headers.get('content-type') ?? '').toLowerCase()
+  const isFormSubmit = !contentType.includes('application/json')
+
+  if (isFormSubmit) {
+    const redirect = body.redirect || '/'
+    const siteUrl = Deno.env.get('SITE_URL') ?? 'http://localhost:2000'
+    headers.set('Location', `${siteUrl}${redirect.startsWith('/') ? '' : '/'}${redirect}`)
+    return new Response(null, { status: 302, headers })
   }
 
   return new Response(JSON.stringify({ result: true }), { status: 200, headers })

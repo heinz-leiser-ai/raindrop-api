@@ -202,7 +202,80 @@ Raindrops System
 - Supabase Edge Functions + Storage
 
 ## QA Test Results
-_To be added by /qa_
+
+**Tested:** 2026-03-13  
+**Methode:** Code Review (kein laufender Server)  
+**Tester:** QA Engineer (AI)
+
+### Acceptance Criteria Status
+
+#### AC-1: Single Bookmark CRUD
+- [x] GET/POST/PUT/DELETE raindrop/{id} vorhanden
+- [x] formatRaindrop() liefert Frontend-kompatibles Format
+- [x] collection.$id und user.$id korrekt gemappt
+
+#### AC-2: Batch Operationen
+- [x] POST raindrops (batch create) mit max 100 Items
+- [x] PUT raindrops/{collectionId} (batch update)
+- [x] DEL raindrops/{collectionId} (batch delete)
+- [ ] **BUG-6:** Batch Update/Delete ohne IDs und collectionId=0 betrifft ALLE Raindrops
+
+#### AC-3: Listing mit Parametern
+- [x] collectionId 0/-1/-99/>0 korrekt gefiltert
+- [x] search mit Operatoren (#tag, type:, domain:, important:, Freitext)
+- [x] sort mit 5 Optionen inkl. Richtungserkennung
+- [x] page/perpage mit max 50 Limit
+- [x] nested=true mit rekursiver Child-Collection-Abfrage
+
+#### AC-4: Trash-Verhalten
+- [x] DEL raindrop/{id}: Soft Delete nach -99
+- [x] DEL raindrop/{id} in Trash: Permanent Delete
+- [ ] **BUG-9:** Permanent Delete entfernt Storage-Dateien nicht
+
+#### AC-5: Suggestion Endpoint
+- [x] Stub liefert leere Daten zurueck (MVP-konform)
+
+### Edge Cases Status
+
+- [x] Duplicate URLs erlaubt (kein UNIQUE Constraint)
+- [x] Fehlender Titel: Fallback auf Link-URL
+- [ ] **BUG-6:** Batch mit leerem ids-Array und collectionId=0 = gefaehrlicher Catch-All
+- [x] Delete in Trash = permanent
+- [x] Stale Version: Kein Optimistic Locking (akzeptabel fuer Self-Hosted)
+
+### Security Audit
+
+- [x] Auth: Jeder Handler prueft getUser() + profile
+- [x] RLS: Policies auf user_id (via profiles.integer_id Subquery)
+- [x] Input: Supabase Client parametrisiert Queries
+- [ ] **BUG-7:** parseUrl hat kein Fetch-Timeout (SSRF-Risiko)
+- [x] Keine Secrets in Responses
+
+### Bugs Found
+
+#### BUG-6: Batch Update/Delete ohne IDs auf collectionId=0
+- **Severity:** Medium
+- **Datei:** `raindrops.ts` -> `batchUpdateRaindrops()` / `batchDeleteRaindrops()`
+- **Problem:** Wenn `ids` leer und `collectionId === 0`, wird kein Collection-Filter gesetzt. Update/Delete betrifft ALLE Raindrops des Users.
+- **Fix:** Guard einbauen: Wenn keine IDs und collectionId=0, Request ablehnen oder explizites `dangerAll` Flag verlangen.
+
+#### BUG-7: parseUrl ohne Fetch-Timeout
+- **Severity:** Medium
+- **Datei:** `raindrops.ts` -> `parseUrl()`
+- **Problem:** Externer Fetch hat kein Timeout. Langsame/unresponsive URLs blockieren die Edge Function bis zum globalen Timeout.
+- **Fix:** `AbortController` mit 10s Timeout einsetzen.
+
+#### BUG-9: Storage-Dateien werden bei permanentem Delete nicht entfernt
+- **Severity:** Medium
+- **Datei:** `raindrops.ts` -> `deleteRaindrop()` / `batchDeleteRaindrops()`
+- **Problem:** Wenn Raindrop mit Upload permanent geloescht wird, bleibt die Datei im Storage.
+- **Fix:** Vor dem Delete `file`-Feld pruefen und Storage-Objekt loeschen.
+
+### Summary
+- **Acceptance Criteria:** 4.5/5 bestanden
+- **Bugs Found:** 3 total (0 Critical, 3 Medium)
+- **Security:** parseUrl als potentielles SSRF-Risiko
+- **Production Ready:** BEDINGT (Bugs 6+9 fixen empfohlen)
 
 ## Deployment
 _To be added by /deploy_

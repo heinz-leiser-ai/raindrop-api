@@ -2,7 +2,8 @@
 
 INSERT INTO storage.buckets (id, name, public) VALUES
   ('raindrop-files', 'raindrop-files', false),
-  ('raindrop-covers', 'raindrop-covers', true);
+  ('raindrop-covers', 'raindrop-covers', true)
+ON CONFLICT (id) DO NOTHING;
 
 -- raindrop-files: private, only owner can read/write
 CREATE POLICY "Users can upload own files"

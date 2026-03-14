@@ -56,7 +56,38 @@
 - Storage-Policies pruefen `auth.uid()` im Ordnernamen
 
 ## QA Test Results
-_To be added by /qa_
+
+**Tested:** 2026-03-13  
+**Methode:** Code Review (kein laufender Server)  
+**Tester:** QA Engineer (AI)
+
+### Acceptance Criteria Status
+
+#### AC-1: Upload Endpoints
+- [x] PUT raindrop/file (Datei-Upload, erzeugt neuen Raindrop)
+- [x] PUT raindrop/{id}/cover (Cover-Upload, aktualisiert Raindrop)
+- [x] PUT collection/{id}/cover (Collection-Cover)
+
+#### AC-2: Storage mit Access Control
+- [x] raindrop-files Bucket (privat) mit Owner-RLS
+- [x] raindrop-covers Bucket (public read, Owner-write)
+- [x] Pfad-Schema: `{auth_uid}/{id}.{ext}`
+
+#### AC-3: Validierung
+- [x] Datei: Max 100MB
+- [x] Cover: Max 10MB, nur PNG/JPEG/GIF/WEBP
+- [x] Fehlende Datei: 400 Error
+
+#### AC-4: Error Shape
+- [x] Konsistentes `{error, errorMessage}` Format
+
+#### AC-5: File Lifecycle
+- [ ] **BUG-9:** Siehe RDBE-4 – Storage-Dateien werden bei permanentem Raindrop-Delete nicht entfernt
+
+### Summary
+- **Acceptance Criteria:** 4.5/5 bestanden (File Lifecycle unvollstaendig)
+- **Bugs Found:** 1 (BUG-9 in RDBE-4 dokumentiert, Medium)
+- **Production Ready:** BEDINGT (Orphan-Files als Tech-Debt akzeptabel)
 
 ## Deployment
 _To be added by /deploy_

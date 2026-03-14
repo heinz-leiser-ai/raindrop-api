@@ -46,7 +46,53 @@
 _To be added by /architecture_
 
 ## QA Test Results
-_To be added by /qa_
+
+**Tested:** 2026-03-13  
+**Methode:** Code Review (kein laufender Server)  
+**Tester:** QA Engineer (AI)
+
+### Acceptance Criteria Status
+
+#### AC-1: Listing
+- [x] GET backups liefert user-scoped Backup-Objekte
+
+#### AC-2: Creation
+- [x] GET backup erzeugt HTML-Backup und speichert in Storage
+- [ ] **BUG-16:** Storage-Pfad nutzt integer `userId` statt auth UUID. RLS-Policies pruefen `auth.uid()::text` im Pfad.
+
+#### AC-3: Metadata
+- [x] _id, created, status, format in Response
+
+#### AC-4: Retention
+- [ ] Keine Retention-Policy implementiert (kein Auto-Cleanup)
+
+#### AC-5: Access Control
+- [x] RLS auf backups-Tabelle (user_id Check)
+- [x] getUser() + profile in Handler
+
+### Edge Cases
+
+- [ ] **BUG-17:** Synchrone Backup-Erstellung kann bei vielen Raindrops (>10k) Edge Function Timeout ueberschreiten
+- [x] Download mit Format-Konvertierung (HTML -> CSV on-the-fly)
+
+### Bugs Found
+
+#### BUG-16: Backup Storage-Pfad inkompatibel mit RLS
+- **Severity:** High
+- **Datei:** `backups.ts` -> `createBackup()`
+- **Problem:** Speichert unter `${userId}/${backupId}.html` wobei `userId` der Integer-ID ist. raindrop-files Storage RLS prueft `auth.uid()::text` (UUID). Upload klappt via Service Client, aber Download-Pfad ist inkonsistent mit anderen Uploads.
+- **Fix:** `authUid` (UUID) statt `userId` (Integer) fuer Storage-Pfad verwenden.
+
+#### BUG-17: Synchrone Backup-Erstellung ohne Limit
+- **Severity:** Medium
+- **Datei:** `backups.ts` -> `createBackup()`
+- **Problem:** Laedt ALLE Raindrops in einem Query. Bei 50k+ Bookmarks Speicher-/Timeout-Risiko.
+- **Fix:** Pagination oder Limit einbauen. Alternativ: Async Job mit Status-Tracking.
+
+### Summary
+- **Acceptance Criteria:** 3.5/5 bestanden (Storage-Pfad Bug, keine Retention)
+- **Bugs Found:** 2 total (1 High, 1 Medium)
+- **Production Ready:** NEIN (BUG-16 muss gefixt werden)
 
 ## Deployment
 _To be added by /deploy_

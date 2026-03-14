@@ -24,7 +24,7 @@ export async function handleBackupRoutes(req: Request, path: string): Promise<Re
 
   // GET backup (create new)
   if (path === 'backup') {
-    return await createBackup(req, service, userId)
+    return await createBackup(req, service, userId, user.id)
   }
 
   // GET backup/{id}.{format}
@@ -61,7 +61,8 @@ async function listBackups(
 async function createBackup(
   req: Request,
   service: ReturnType<typeof createServiceClient>,
-  userId: number
+  userId: number,
+  authUid: string
 ): Promise<Response> {
   // Load all user raindrops
   const { data: raindrops } = await service
@@ -92,7 +93,7 @@ async function createBackup(
 
   // Store backup file in storage
   const backupId = crypto.randomUUID()
-  const storagePath = `${userId}/${backupId}.html`
+  const storagePath = `${authUid}/${backupId}.html`
 
   await service.storage
     .from('raindrop-files')

@@ -104,7 +104,7 @@ function formatRaindrop(row: Record<string, unknown>) {
     user: { '$id': row.user_id },
     created: row.created,
     lastUpdate: row.last_update,
-    pleaseParse: row.pleaseParse ?? null,
+    pleaseParse: row.pleaseparse ?? null,
   }
 }
 
@@ -152,7 +152,7 @@ async function createRaindrop(
   if (body.media) insert.media = body.media
   if (body.highlights) insert.highlights = body.highlights
   if (body.reminder) insert.reminder = body.reminder
-  if (body.pleaseParse) insert.pleaseParse = body.pleaseParse
+  if (body.pleaseParse) insert.pleaseparse = body.pleaseParse
 
   const { data, error } = await service
     .from('raindrops')
@@ -187,7 +187,7 @@ async function updateRaindrop(
   if (body.removed !== undefined) updates.removed = body.removed
   if (body.reminder !== undefined) updates.reminder = body.reminder
   if (body.file !== undefined) updates.file = body.file
-  if (body.pleaseParse !== undefined) updates.pleaseParse = body.pleaseParse
+  if (body.pleaseParse !== undefined) updates.pleaseparse = body.pleaseParse
 
   if (body.collectionId !== undefined) {
     updates.collection_id = body.collectionId
@@ -370,10 +370,16 @@ async function batchCreateRaindrops(
   userId: number
 ): Promise<Response> {
   const body = await req.json()
-  const items: Record<string, unknown>[] = body.items ?? []
+  console.log('POST /raindrops body:', JSON.stringify(body))
+  let items: Record<string, unknown>[] = body.items ?? []
+
+  // Fallback: einzelnes Item ohne items-Wrapper
+  if (!items.length && body.link) {
+    items = [body]
+  }
 
   if (!items.length) {
-    return errorResponse(req, 400, 'missing_items', 'No items provided')
+    return errorResponse(req, 400, 'missing_items', `No items. Keys: ${Object.keys(body).join(',')}`)
   }
 
   const inserts = items.slice(0, 100).map((item) => ({
@@ -389,7 +395,7 @@ async function batchCreateRaindrops(
     order: item.order ?? 0,
     tags: item.tags ?? [],
     media: item.media ?? [],
-    pleaseParse: item.pleaseParse ?? null,
+    pleaseparse: item.pleaseParse ?? null,
   }))
 
   const { data, error } = await service
@@ -426,7 +432,7 @@ async function batchUpdateRaindrops(
     if (body.collectionId === -1) updates.removed = false
   }
   if (body.excerpt !== undefined) updates.excerpt = body.excerpt
-  if (body.pleaseParse !== undefined) updates.pleaseParse = body.pleaseParse
+  if (body.pleaseParse !== undefined) updates.pleaseparse = body.pleaseParse
 
   let query = service
     .from('raindrops')
@@ -593,7 +599,7 @@ function extractTagContent(html: string, tag: string): string | null {
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
 const MAX_COVER_SIZE = 10 * 1024 * 1024 // 10MB
-const ALLOWED_COVER_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+const ALLOWED_COVER_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml', 'image/x-icon', 'image/bmp', 'image/tiff']
 
 async function uploadRaindropFile(
   req: Request,

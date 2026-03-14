@@ -45,7 +45,55 @@
 _To be added by /architecture_
 
 ## QA Test Results
-_To be added by /qa_
+
+**Tested:** 2026-03-13  
+**Methode:** Code Review (kein laufender Server)  
+**Tester:** QA Engineer (AI)
+
+### Acceptance Criteria Status
+
+#### AC-1: Import File Upload
+- [x] POST import/file akzeptiert FormData mit `import` Feld
+- [x] Netscape-HTML-Parser extrahiert Ordner, Bookmarks, Tags, Datum, Beschreibungen
+- [x] Response: `{result, items, count}`
+
+#### AC-2: Duplicate URL Check
+- [x] POST import/url/exists prueft bis zu 500 URLs
+- [x] Response: `{result, ids, duplicates}`
+
+#### AC-3: Batch Creation
+- [x] Nutzt bestehenden POST raindrops Endpoint (RDBE-4)
+
+#### AC-4: Export
+- [x] CSV-Export mit korrekter Escaping
+- [x] HTML-Export im Netscape-Format
+- [ ] **BUG-11:** Export-Routen nicht erreichbar (Routing-Bug)
+
+#### AC-5: Auth
+- [x] getUser() + profile Check in allen Handlern
+
+### Security Audit
+
+- [ ] **BUG-12:** Export-Responses (CSV/HTML) haben keine CORS-Headers. Browser blockiert Response bei credentials:include.
+
+### Bugs Found
+
+#### BUG-11: Export-Routen nicht erreichbar (Routing-Bug)
+- **Severity:** High
+- **Datei:** `index.ts` (Router)
+- **Problem:** `raindrops/{id}/export.csv` matcht `path.startsWith('raindrop')` (Zeile 40) und wird an `handleRaindropRoutes` geschickt. Dort matcht Regex `^raindrops\/(-?\d+)(.*)$` und ruft `listRaindrops` statt Export auf. Der Export-Check auf Zeile 53 ist unerreichbarer Code.
+- **Fix:** Export-Route VOR der raindrop-Route pruefen, oder Export direkt in `handleRaindropRoutes` integrieren.
+
+#### BUG-12: Export/Download ohne CORS-Headers
+- **Severity:** Medium
+- **Datei:** `import-export.ts` -> `exportRaindrops()`, `backups.ts` -> `downloadBackup()`
+- **Problem:** Gibt `new Response()` ohne CORS-Headers zurueck. Frontend mit `credentials: include` bekommt Response vom Browser blockiert.
+- **Fix:** CORS-Headers auch bei File-Responses setzen.
+
+### Summary
+- **Acceptance Criteria:** 4/5 bestanden (Export nicht erreichbar)
+- **Bugs Found:** 2 total (1 High, 1 Medium)
+- **Production Ready:** NEIN (BUG-11 blockiert Export komplett)
 
 ## Deployment
 _To be added by /deploy_

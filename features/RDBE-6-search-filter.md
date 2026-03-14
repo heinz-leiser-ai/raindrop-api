@@ -59,7 +59,47 @@ Suche und Filter sind ueber mehrere bestehende Route-Handler verteilt (keine eig
 - **Recent Searches**: Eigene Tabelle, wird bei jeder Suche automatisch befuellt
 
 ## QA Test Results
-_To be added by /qa_
+
+**Tested:** 2026-03-13  
+**Methode:** Code Review (kein laufender Server)  
+**Tester:** QA Engineer (AI)
+
+### Acceptance Criteria Status
+
+#### AC-1: Search Operators
+- [x] `#tag` -> `contains('tags', [tag])`
+- [x] `type:xxx` -> `eq('type', xxx)`
+- [x] `domain:xxx` -> `eq('domain', xxx)`
+- [x] `important:true/false` -> `eq('important', bool)`
+- [x] Freitext -> `textSearch('search_vector', ...)`
+
+#### AC-2: Sort & Pagination
+- [x] Sort-Optionen: created, sort, title, domain, score
+- [x] Richtungserkennung via `-` Prefix
+- [x] Page/Perpage mit Max 50 Limit
+- [x] Range-basierte Pagination
+
+#### AC-3: Filter Endpoint
+- [x] GET filters/{collectionId} liefert tags, types, domains, important, broken, duplicates, notag
+- [x] tagsSort Parameter unterstuetzt
+
+#### AC-4: Freshness
+- [x] GET collection/{id}/lastAction liefert Timestamp + Version
+
+#### AC-5: Access Control
+- [x] user_id Filter in allen Queries
+- [x] RLS auf raindrops und recent_searches Tabelle
+
+### Edge Cases
+
+- [x] Leerer Search-String: Gibt alle Raindrops zurueck (kein Filter)
+- [x] Ungueltige Operatoren: Werden als Freitext behandelt (kein Crash)
+- [x] Recent Searches: Auto-Save bei jeder Suche, max 20 Eintraege
+
+### Summary
+- **Acceptance Criteria:** 5/5 bestanden
+- **Bugs Found:** 0
+- **Production Ready:** JA
 
 ## Deployment
 _To be added by /deploy_

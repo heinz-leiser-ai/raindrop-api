@@ -8,6 +8,7 @@ import { handleTagRoutes } from './routes/tags.ts'
 import { handleImportExportRoutes } from './routes/import-export.ts'
 import { handleHighlightRoutes } from './routes/highlights.ts'
 import { handleBackupRoutes } from './routes/backups.ts'
+import { handleThumbnailRoutes } from './routes/thumbnail.ts'
 
 Deno.serve(async (req) => {
   const corsResponse = handleCors(req)
@@ -37,6 +38,11 @@ Deno.serve(async (req) => {
       return await handleImportExportRoutes(req, path)
     }
 
+    // Export muss VOR raindrop-Route geprueft werden
+    if (path.match(/^raindrops\/.*\/export\./)) {
+      return await handleImportExportRoutes(req, path)
+    }
+
     if (path.startsWith('raindrop') || path.startsWith('import/url/parse')) {
       return await handleRaindropRoutes(req, path)
     }
@@ -49,9 +55,8 @@ Deno.serve(async (req) => {
       return await handleBackupRoutes(req, path)
     }
 
-    // Export: raindrops/{id}/export.{format} - handled by import-export router
-    if (path.match(/^raindrops\/.*\/export\./)) {
-      return await handleImportExportRoutes(req, path)
+    if (path.startsWith('thumbnail/')) {
+      return await handleThumbnailRoutes(req, path)
     }
 
     return errorResponse(req, 404, 'not_found', `Route not found: ${path}`)

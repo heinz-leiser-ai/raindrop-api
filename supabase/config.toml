@@ -1,5 +1,4 @@
-[project]
-id = "raindrop-self-hosted"
+project_id = "raindrop-self-hosted"
 
 [api]
 port = 54321

@@ -31,7 +31,7 @@ export async function handleCollectionRoutes(req: Request, path: string): Promis
   }
 
   // GET collections/covers/{query}
-  if (path.startsWith('collections/covers/')) {
+  if (path.startsWith('collections/covers')) {
     return jsonResponse({ result: true, items: [] }, req)
   }
 
@@ -460,17 +460,19 @@ async function uploadCollectionCover(
   const file = formData.get('cover') as File | null
   if (!file) return errorResponse(req, 400, '-1', 'no file')
 
-  const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
-  if (!allowedTypes.includes(file.type)) {
-    return errorResponse(req, 400, 'file_invalid', 'File is invalid')
+  const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml', 'image/x-icon', 'image/bmp', 'image/tiff']
+  const ext = (file.name?.split('.').pop() ?? '').toLowerCase()
+  const allowedExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'tiff']
+  if (file.type && !allowedTypes.includes(file.type) && !allowedExts.includes(ext)) {
+    return errorResponse(req, 400, 'file_invalid', `File type '${file.type}' (ext: ${ext}) not allowed`)
   }
 
   if (file.size > 10 * 1024 * 1024) {
     return errorResponse(req, 400, 'file_size_limit', 'File size limit')
   }
 
-  const ext = file.name.split('.').pop() ?? 'jpg'
-  const storagePath = `${authUid}/collection-${collectionId}.${ext}`
+  const fileExt = ext || 'jpg'
+  const storagePath = `${authUid}/collection-${collectionId}.${fileExt}`
 
   const { error: uploadError } = await service.storage
     .from('raindrop-covers')
@@ -500,6 +502,20 @@ async function uploadCollectionCover(
 
 // ─── Sharing ─────────────────────────────────────────────
 
+async function verifyCollectionOwner(
+  service: ReturnType<typeof createServiceClient>,
+  collectionId: number,
+  userId: number
+): Promise<boolean> {
+  const { data } = await service
+    .from('collections')
+    .select('_id')
+    .eq('_id', collectionId)
+    .eq('user_id', userId)
+    .single()
+  return !!data
+}
+
 async function getSharingList(
   req: Request,
   service: ReturnType<typeof createServiceClient>,
@@ -527,6 +543,10 @@ async function createSharingInvite(
   userId: number,
   collectionId: number
 ): Promise<Response> {
+  if (!await verifyCollectionOwner(service, collectionId, userId)) {
+    return errorResponse(req, 403, 'forbidden', 'Only the collection owner can create invites')
+  }
+
   const body = await req.json()
   const role = body.role ?? 'viewer'
   const token = crypto.randomUUID()
@@ -550,6 +570,10 @@ async function updateSharingUser(
   collectionId: number,
   targetUserId: number
 ): Promise<Response> {
+  if (!await verifyCollectionOwner(service, collectionId, userId)) {
+    return errorResponse(req, 403, 'forbidden', 'Only the collection owner can update sharing')
+  }
+
   const body = await req.json()
   const updates: Record<string, unknown> = {}
   if (body.role !== undefined) updates.role = body.role
@@ -568,10 +592,14 @@ async function updateSharingUser(
 async function removeSharingUser(
   req: Request,
   service: ReturnType<typeof createServiceClient>,
-  _userId: number,
+  userId: number,
   collectionId: number,
   targetUserId: number
 ): Promise<Response> {
+  if (!await verifyCollectionOwner(service, collectionId, userId)) {
+    return errorResponse(req, 403, 'forbidden', 'Only the collection owner can remove users')
+  }
+
   const { error } = await service
     .from('collection_sharing')
     .delete()
@@ -586,9 +614,13 @@ async function removeSharingUser(
 async function unshareCollection(
   req: Request,
   service: ReturnType<typeof createServiceClient>,
-  _userId: number,
+  userId: number,
   collectionId: number
 ): Promise<Response> {
+  if (!await verifyCollectionOwner(service, collectionId, userId)) {
+    return errorResponse(req, 403, 'forbidden', 'Only the collection owner can unshare')
+  }
+
   const { error } = await service
     .from('collection_sharing')
     .delete()
