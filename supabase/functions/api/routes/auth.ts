@@ -1,6 +1,7 @@
 import { createAnonClient, createServiceClient, createUserClient, getUser } from '../../_shared/supabase.ts'
 import { jsonResponse, errorResponse, unauthorizedResponse } from '../../_shared/response.ts'
 import { corsHeaders } from '../../_shared/cors.ts'
+import { getEnv } from '../../_shared/env.ts'
 
 export async function handleAuthRoutes(req: Request, path: string): Promise<Response> {
   switch (path) {
@@ -51,7 +52,7 @@ async function emailLogin(req: Request): Promise<Response> {
   if (error) {
     const ct = (req.headers.get('content-type') ?? '').toLowerCase()
     if (!ct.includes('application/json')) {
-      const siteUrl = Deno.env.get('SITE_URL') ?? 'http://localhost:2000'
+      const siteUrl = getEnv('SITE_URL') ?? 'http://localhost:2000'
       return new Response(null, {
         status: 302,
         headers: {
@@ -70,11 +71,11 @@ async function emailLogin(req: Request): Promise<Response> {
   })
 
   if (data.session) {
-    const secure = Deno.env.get('COOKIE_SECURE') !== 'false'
-    const domain = Deno.env.get('COOKIE_DOMAIN') ?? ''
+    const secure = getEnv('COOKIE_SECURE') !== 'false'
+    const domain = getEnv('COOKIE_DOMAIN') ?? ''
     const domainAttr = domain ? `; Domain=${domain}` : ''
 
-    const sameSite = Deno.env.get('COOKIE_SAMESITE') ?? 'None'
+    const sameSite = getEnv('COOKIE_SAMESITE') ?? 'None'
     headers.append(
       'Set-Cookie',
       `sb-access-token=${data.session.access_token}; Path=/; HttpOnly; SameSite=${sameSite}${sameSite === 'None' ? '; Secure' : (secure ? '; Secure' : '')}${domainAttr}; Max-Age=${data.session.expires_in}`
@@ -90,7 +91,7 @@ async function emailLogin(req: Request): Promise<Response> {
 
   if (isFormSubmit) {
     const redirect = body.redirect || '/'
-    const siteUrl = Deno.env.get('SITE_URL') ?? 'http://localhost:2000'
+    const siteUrl = getEnv('SITE_URL') ?? 'http://localhost:2000'
     headers.set('Location', `${siteUrl}${redirect.startsWith('/') ? '' : '/'}${redirect}`)
     return new Response(null, { status: 302, headers })
   }
@@ -104,7 +105,7 @@ async function emailSignup(req: Request): Promise<Response> {
   }
 
   // Admin-Auth: Nur authentifizierte Admins duerfen User anlegen
-  const adminKey = Deno.env.get('ADMIN_API_KEY')
+  const adminKey = getEnv('ADMIN_API_KEY')
   const providedKey = req.headers.get('X-Admin-Key')
 
   if (!adminKey || providedKey !== adminKey) {
@@ -159,7 +160,7 @@ async function emailLost(req: Request): Promise<Response> {
 
   const supabase = createAnonClient()
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${Deno.env.get('SITE_URL') ?? 'http://localhost:3000'}/account/recover`,
+    redirectTo: `${getEnv('SITE_URL') ?? 'http://localhost:3000'}/account/recover`,
   })
 
   if (error) {
@@ -217,7 +218,7 @@ async function logout(req: Request): Promise<Response> {
     ...corsHeaders(origin),
   })
 
-  const domain = Deno.env.get('COOKIE_DOMAIN') ?? ''
+  const domain = getEnv('COOKIE_DOMAIN') ?? ''
   const domainAttr = domain ? `; Domain=${domain}` : ''
   headers.append('Set-Cookie', `sb-access-token=; Path=/; HttpOnly; Max-Age=0${domainAttr}`)
   headers.append('Set-Cookie', `sb-refresh-token=; Path=/; HttpOnly; Max-Age=0${domainAttr}`)
@@ -251,7 +252,7 @@ async function jwtLogin(req: Request): Promise<Response> {
     ...corsHeaders(origin),
   })
 
-  const secure = Deno.env.get('COOKIE_SECURE') !== 'false'
+  const secure = getEnv('COOKIE_SECURE') !== 'false'
   headers.append(
     'Set-Cookie',
     `sb-access-token=${data.session.access_token}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}; Max-Age=${data.session.expires_in}`
@@ -295,7 +296,7 @@ async function oauthNative(req: Request, path: string): Promise<Response> {
     ...corsHeaders(origin),
   })
 
-  const secure = Deno.env.get('COOKIE_SECURE') !== 'false'
+  const secure = getEnv('COOKIE_SECURE') !== 'false'
   headers.append(
     'Set-Cookie',
     `sb-access-token=${data.session.access_token}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}; Max-Age=${data.session.expires_in}`

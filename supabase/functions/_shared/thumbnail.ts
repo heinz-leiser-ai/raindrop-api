@@ -1,4 +1,5 @@
-const THUMBNAIL_ENDPOINT = 'https://html2pdf-theta.vercel.app/api/v1/thumbnail'
+import { getEnv } from './env.ts'
+const THUMBNAIL_ENDPOINT = 'https://toolbox-six-tau.vercel.app/api/v1/thumbnail'
 
 type ThumbnailParams = {
   url: string
@@ -21,7 +22,7 @@ export async function createSignedThumbnailUrl(
   targetUrl: string,
   overrides: ThumbnailOverrides = {}
 ): Promise<string> {
-  const secret = Deno.env.get('THUMBNAIL_SIGNING_SECRET')
+  const secret = getEnv('THUMBNAIL_SIGNING_SECRET')
   if (!secret) {
     throw new Error('THUMBNAIL_SIGNING_SECRET is not set')
   }

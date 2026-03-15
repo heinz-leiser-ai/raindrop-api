@@ -1,4 +1,6 @@
-const ALLOWED_ORIGINS = Deno.env.get('ALLOWED_ORIGINS')?.split(',') ?? [
+import { getEnv } from './env.ts'
+
+const ALLOWED_ORIGINS = getEnv('ALLOWED_ORIGINS')?.split(',') ?? [
   'http://localhost:2000',
   'http://localhost:3000',
   'http://localhost:8080',

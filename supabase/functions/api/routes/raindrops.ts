@@ -1,5 +1,6 @@
 import { createServiceClient, getUser } from '../../_shared/supabase.ts'
 import { jsonResponse, errorResponse, unauthorizedResponse } from '../../_shared/response.ts'
+import { getEnv } from '../../_shared/env.ts'
 
 export async function handleRaindropRoutes(req: Request, path: string): Promise<Response> {
   const user = await getUser(req)
@@ -629,7 +630,7 @@ async function uploadRaindropFile(
     return errorResponse(req, 400, 'file_invalid', uploadError.message)
   }
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+  const supabaseUrl = getEnv('SUPABASE_URL')!
   const fileUrl = `${supabaseUrl}/storage/v1/object/raindrop-files/${storagePath}`
   const fileType = detectType(file.name)
 
@@ -686,7 +687,7 @@ async function uploadRaindropCover(
     return errorResponse(req, 400, 'file_invalid', uploadError.message)
   }
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+  const supabaseUrl = getEnv('SUPABASE_URL')!
   const coverUrl = `${supabaseUrl}/storage/v1/object/public/raindrop-covers/${storagePath}`
 
   const { data, error } = await service

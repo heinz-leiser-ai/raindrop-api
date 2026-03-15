@@ -20,9 +20,15 @@ export async function handleImportExportRoutes(req: Request, path: string): Prom
     return await importFile(req)
   }
 
-  // POST import/url/exists
+  // POST|GET import/url/exists
   if (path === 'import/url/exists' && req.method === 'POST') {
-    return await checkUrlExists(req, service, userId)
+    return await checkUrlExists(req, service, userId, null)
+  }
+
+  if (path === 'import/url/exists' && req.method === 'GET') {
+    const requestUrl = new URL(req.url)
+    const singleUrl = requestUrl.searchParams.get('url')
+    return await checkUrlExists(req, service, userId, singleUrl ? [singleUrl] : [])
   }
 
   // GET raindrops/{collectionId}/export.{format}
@@ -54,10 +60,17 @@ async function importFile(req: Request): Promise<Response> {
 async function checkUrlExists(
   req: Request,
   service: ReturnType<typeof createServiceClient>,
-  userId: number
+  userId: number,
+  overrideUrls: string[] | null
 ): Promise<Response> {
-  const body = await req.json()
-  const urls: string[] = body.urls ?? []
+  let urls: string[] = []
+
+  if (overrideUrls) {
+    urls = overrideUrls
+  } else {
+    const body = await req.json().catch(() => ({} as { urls?: string[] }))
+    urls = body.urls ?? []
+  }
 
   if (!urls.length) {
     return jsonResponse({ result: false, ids: [], duplicates: [] }, req)

@@ -1,5 +1,6 @@
 import { createServiceClient, getUser } from '../../_shared/supabase.ts'
 import { jsonResponse, errorResponse, unauthorizedResponse } from '../../_shared/response.ts'
+import { getEnv } from '../../_shared/env.ts'
 
 export async function handleCollectionRoutes(req: Request, path: string): Promise<Response> {
   const user = await getUser(req)
@@ -482,7 +483,7 @@ async function uploadCollectionCover(
     return errorResponse(req, 400, 'file_invalid', uploadError.message)
   }
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+  const supabaseUrl = getEnv('SUPABASE_URL')!
   const coverUrl = `${supabaseUrl}/storage/v1/object/public/raindrop-covers/${storagePath}`
 
   const { data, error } = await service
@@ -557,7 +558,7 @@ async function createSharingInvite(
 
   if (error) return errorResponse(req, 400, 'invite_failed', error.message)
 
-  const siteUrl = Deno.env.get('SITE_URL') ?? 'http://localhost:3000'
+  const siteUrl = getEnv('SITE_URL') ?? 'http://localhost:3000'
   const link = `${siteUrl}/app/invite/${token}`
 
   return jsonResponse({ result: true, link, token }, req)
