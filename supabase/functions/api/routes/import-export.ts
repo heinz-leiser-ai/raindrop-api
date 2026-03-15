@@ -15,8 +15,8 @@ export async function handleImportExportRoutes(req: Request, path: string): Prom
   if (!profile) return unauthorizedResponse(req)
   const userId = profile.integer_id
 
-  // POST import/file
-  if (path === 'import/file' && req.method === 'POST') {
+  // POST|PUT import/file
+  if (path === 'import/file' && (req.method === 'POST' || req.method === 'PUT')) {
     return await importFile(req)
   }
 

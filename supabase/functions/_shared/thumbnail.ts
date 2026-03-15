@@ -1,5 +1,3 @@
-import { createHmac } from 'node:crypto'
-
 const THUMBNAIL_ENDPOINT = 'https://html2pdf-theta.vercel.app/api/v1/thumbnail'
 
 type ThumbnailParams = {
@@ -19,10 +17,10 @@ type ThumbnailOverrides = Partial<
   Omit<ThumbnailParams, 'url' | 'expires'>
 >
 
-export function createSignedThumbnailUrl(
+export async function createSignedThumbnailUrl(
   targetUrl: string,
   overrides: ThumbnailOverrides = {}
-): string {
+): Promise<string> {
   const secret = Deno.env.get('THUMBNAIL_SIGNING_SECRET')
   if (!secret) {
     throw new Error('THUMBNAIL_SIGNING_SECRET is not set')
@@ -48,10 +46,34 @@ export function createSignedThumbnailUrl(
     .map(([key, value]) => `${key}=${value}`)
     .join('&')
 
-  const token = createHmac('sha256', secret).update(canonicalString).digest('hex')
+  const token = await signHmacSha256Hex(secret, canonicalString)
 
   const searchParams = new URLSearchParams(params)
   searchParams.set('token', token)
 
   return `${THUMBNAIL_ENDPOINT}?${searchParams.toString()}`
+}
+
+async function signHmacSha256Hex(secret: string, input: string): Promise<string> {
+  const keyData = new TextEncoder().encode(secret)
+  const payload = new TextEncoder().encode(input)
+
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    keyData,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  )
+
+  const signature = await crypto.subtle.sign('HMAC', cryptoKey, payload)
+  return bytesToHex(new Uint8Array(signature))
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  let hex = ''
+  for (const b of bytes) {
+    hex += b.toString(16).padStart(2, '0')
+  }
+  return hex
 }

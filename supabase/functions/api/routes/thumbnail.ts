@@ -25,7 +25,7 @@ export async function handleThumbnailRoutes(req: Request, path: string): Promise
   }
 
   const url = new URL(req.url)
-  const signedUrl = createSignedThumbnailUrl(targetUrl, {
+  const signedUrl = await createSignedThumbnailUrl(targetUrl, {
     mode: url.searchParams.get('mode') ?? undefined,
     fill: url.searchParams.get('fill') ?? undefined,
     format: url.searchParams.get('format') ?? undefined,

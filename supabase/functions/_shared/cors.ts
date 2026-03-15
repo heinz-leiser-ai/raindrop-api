@@ -1,6 +1,8 @@
 const ALLOWED_ORIGINS = Deno.env.get('ALLOWED_ORIGINS')?.split(',') ?? [
+  'http://localhost:2000',
   'http://localhost:3000',
   'http://localhost:8080',
+  'https://project-fijck.vercel.app',
 ]
 
 export const corsHeaders = (origin?: string | null): Record<string, string> => {
