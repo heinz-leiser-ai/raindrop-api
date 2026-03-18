@@ -70,10 +70,6 @@ export async function handleRaindropRoutes(req: Request, path: string): Promise<
 
   // GET raindrops/links (duplicate check)
   if (path === 'raindrops/links' && req.method === 'GET') {
-    // #region agent log
-    const reqUrl2 = new URL(req.url)
-    fetch('http://127.0.0.1:7930/ingest/3e15f807-ca65-47b7-8783-7b9371ab37ba',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'34130b'},body:JSON.stringify({sessionId:'34130b',location:'raindrops.ts:raindrops/links',message:'links route hit',data:{params:Object.fromEntries(reqUrl2.searchParams)},hypothesisId:'H2',timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     return await checkDuplicateLinks(req, service, userId)
   }
 

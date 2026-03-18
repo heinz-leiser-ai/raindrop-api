@@ -94,9 +94,6 @@ async function emailLogin(req: Request): Promise<Response> {
     const siteUrl = getEnv('SITE_URL') ?? 'http://localhost:2000'
     const isAbsolute = redirect.startsWith('http://') || redirect.startsWith('https://')
     const location = isAbsolute ? redirect : `${siteUrl}${redirect.startsWith('/') ? '' : '/'}${redirect}`
-    // #region agent log
-    fetch('http://127.0.0.1:7930/ingest/3e15f807-ca65-47b7-8783-7b9371ab37ba',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'34130b'},body:JSON.stringify({sessionId:'34130b',location:'auth.ts:emailLogin:redirect',message:'redirect after login',data:{redirect,siteUrl,isAbsolute,finalLocation:location},hypothesisId:'H3',timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     headers.set('Location', location)
     return new Response(null, { status: 302, headers })
   }
@@ -217,16 +214,9 @@ async function logout(req: Request): Promise<Response> {
   const cookies = req.headers.get('cookie') ?? ''
   const accessToken = cookies.match(/sb-access-token=([^;]*)/)?.[1] ?? null
 
-  // #region agent log
-  fetch('http://127.0.0.1:7930/ingest/3e15f807-ca65-47b7-8783-7b9371ab37ba',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'34130b'},body:JSON.stringify({sessionId:'34130b',location:'auth.ts:logout',message:'logout called',data:{hasAccessToken:!!accessToken,cookieHeader:cookies.substring(0,200)},hypothesisId:'H5',timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
-
   if (accessToken) {
     const userClient = createUserClient(req)
-    const { error: signOutError } = await userClient.auth.signOut({ scope: 'global' })
-    // #region agent log
-    fetch('http://127.0.0.1:7930/ingest/3e15f807-ca65-47b7-8783-7b9371ab37ba',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'34130b'},body:JSON.stringify({sessionId:'34130b',location:'auth.ts:logout:signOut',message:'signOut result',data:{signOutError:signOutError?.message ?? null},hypothesisId:'H6',timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
+    await userClient.auth.signOut({ scope: 'global' })
   }
 
   const origin = req.headers.get('origin')
@@ -241,10 +231,6 @@ async function logout(req: Request): Promise<Response> {
   const secureAttr = sameSite === 'None' ? '; Secure' : ''
   headers.append('Set-Cookie', `sb-access-token=; Path=/; HttpOnly; SameSite=${sameSite}${secureAttr}; Max-Age=0${domainAttr}`)
   headers.append('Set-Cookie', `sb-refresh-token=; Path=/; HttpOnly; SameSite=${sameSite}${secureAttr}; Max-Age=0${domainAttr}`)
-
-  // #region agent log
-  fetch('http://127.0.0.1:7930/ingest/3e15f807-ca65-47b7-8783-7b9371ab37ba',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'34130b'},body:JSON.stringify({sessionId:'34130b',location:'auth.ts:logout:cookies',message:'clearing cookies',data:{domainAttr,sameSite,secureAttr},hypothesisId:'H5',timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
 
   return new Response(JSON.stringify({ result: true }), { status: 200, headers })
 }
