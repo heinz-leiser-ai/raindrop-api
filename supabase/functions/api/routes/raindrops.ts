@@ -68,6 +68,15 @@ export async function handleRaindropRoutes(req: Request, path: string): Promise<
     return await batchCreateRaindrops(req, service, userId)
   }
 
+  // GET raindrops/links (duplicate check)
+  if (path === 'raindrops/links' && req.method === 'GET') {
+    // #region agent log
+    const reqUrl2 = new URL(req.url)
+    fetch('http://127.0.0.1:7930/ingest/3e15f807-ca65-47b7-8783-7b9371ab37ba',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'34130b'},body:JSON.stringify({sessionId:'34130b',location:'raindrops.ts:raindrops/links',message:'links route hit',data:{params:Object.fromEntries(reqUrl2.searchParams)},hypothesisId:'H2',timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    return await checkDuplicateLinks(req, service, userId)
+  }
+
   // GET/PUT/DEL raindrops/{collectionId}
   const batchMatch = path.match(/^raindrops\/(-?\d+)(.*)$/)
   if (batchMatch) {
@@ -135,6 +144,7 @@ async function createRaindrop(
   userId: number
 ): Promise<Response> {
   const body = await req.json()
+  const normalizedCover = normalizeCoverUrl(body.cover, req)
 
   const insert: Record<string, unknown> = {
     user_id: userId,
@@ -143,7 +153,7 @@ async function createRaindrop(
     excerpt: body.excerpt ?? '',
     note: body.note ?? '',
     type: body.type ?? detectType(body.link ?? ''),
-    cover: body.cover ?? '',
+    cover: normalizedCover ?? '',
     collection_id: body.collectionId ?? body['collection.$id'] ?? -1,
     important: body.important ?? false,
     order: body.order ?? 0,
@@ -180,7 +190,7 @@ async function updateRaindrop(
   if (body.note !== undefined) updates.note = body.note
   if (body.link !== undefined) updates.link = body.link
   if (body.type !== undefined) updates.type = body.type
-  if (body.cover !== undefined) updates.cover = body.cover
+  if (body.cover !== undefined) updates.cover = normalizeCoverUrl(body.cover, req)
   if (body.media !== undefined) updates.media = body.media
   if (body.tags !== undefined) updates.tags = body.tags
   if (body.important !== undefined) updates.important = body.important
@@ -390,7 +400,7 @@ async function batchCreateRaindrops(
     excerpt: item.excerpt ?? '',
     note: item.note ?? '',
     type: item.type ?? detectType((item.link as string) ?? ''),
-    cover: item.cover ?? '',
+    cover: normalizeCoverUrl(item.cover, req) ?? '',
     collection_id: item.collectionId ?? item['collection.$id'] ?? -1,
     important: item.important ?? false,
     order: item.order ?? 0,
@@ -427,7 +437,7 @@ async function batchUpdateRaindrops(
   if (body.important !== undefined) updates.important = body.important
   if (body.tags !== undefined) updates.tags = body.tags
   if (body.media !== undefined) updates.media = body.media
-  if (body.cover !== undefined) updates.cover = body.cover
+  if (body.cover !== undefined) updates.cover = normalizeCoverUrl(body.cover, req)
   if (body.collectionId !== undefined) {
     updates.collection_id = body.collectionId
     if (body.collectionId === -1) updates.removed = false
@@ -596,6 +606,37 @@ function extractTagContent(html: string, tag: string): string | null {
   return match ? match[1].trim() : null
 }
 
+function normalizeCoverUrl(rawCover: unknown, req: Request): string {
+  if (typeof rawCover !== 'string' || !rawCover.trim()) return ''
+
+  const cover = rawCover.trim()
+
+  try {
+    const parsed = new URL(cover)
+    const isLegacyHost = parsed.hostname === 'html2pdf-theta.vercel.app'
+    const isCurrentHost = parsed.hostname === 'toolbox-six-tau.vercel.app'
+    const isThumbnailPath = parsed.pathname === '/api/v1/thumbnail'
+    const sourceUrl = parsed.searchParams.get('url')
+
+    if (!(isThumbnailPath && sourceUrl && (isLegacyHost || isCurrentHost))) {
+      return cover
+    }
+
+    const reqUrl = new URL(req.url)
+    const apiBase = `${reqUrl.origin}/functions/v1/api/thumbnail/render/${encodeURIComponent(sourceUrl)}`
+    const passthrough = new URLSearchParams()
+    const keys = ['mode', 'fill', 'format', 'width', 'height', 'ar', 'dpr', 'quality']
+    for (const key of keys) {
+      const value = parsed.searchParams.get(key)
+      if (value) passthrough.set(key, value)
+    }
+
+    return passthrough.toString() ? `${apiBase}?${passthrough.toString()}` : apiBase
+  } catch {
+    return cover
+  }
+}
+
 // ─── File Upload ─────────────────────────────────────────
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
@@ -744,6 +785,33 @@ async function clearRecentSearches(
 }
 
 // ─── Helpers ─────────────────────────────────────────────
+
+async function checkDuplicateLinks(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number
+): Promise<Response> {
+  const url = new URL(req.url)
+  const links = url.searchParams.getAll('url')
+
+  if (!links.length) {
+    return jsonResponse({ result: true, items: [], count: 0 }, req)
+  }
+
+  const { data, error } = await service
+    .from('raindrops')
+    .select('*')
+    .eq('user_id', userId)
+    .in('link', links)
+
+  if (error) return errorResponse(req, 500, 'db_error', error.message)
+
+  return jsonResponse({
+    result: true,
+    items: (data ?? []).map(formatRaindrop),
+    count: (data ?? []).length,
+  }, req)
+}
 
 async function getCollectionDescendantIds(
   service: ReturnType<typeof createServiceClient>,

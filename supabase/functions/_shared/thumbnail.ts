@@ -18,6 +18,22 @@ type ThumbnailOverrides = Partial<
   Omit<ThumbnailParams, 'url' | 'expires'>
 >
 
+const VALID_MODES = ['fit', 'crop'] as const
+type ValidMode = typeof VALID_MODES[number]
+
+function sanitizeMode(mode?: string): ValidMode {
+  if (mode && (VALID_MODES as readonly string[]).includes(mode)) return mode as ValidMode
+  return 'crop'
+}
+
+function extractOrigin(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return url
+  }
+}
+
 export async function createSignedThumbnailUrl(
   targetUrl: string,
   overrides: ThumbnailOverrides = {}
@@ -27,11 +43,17 @@ export async function createSignedThumbnailUrl(
     throw new Error('THUMBNAIL_SIGNING_SECRET is not set')
   }
 
+  // #region agent log
+  fetch('http://127.0.0.1:7930/ingest/3e15f807-ca65-47b7-8783-7b9371ab37ba',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'34130b'},body:JSON.stringify({sessionId:'34130b',location:'thumbnail.ts:createSignedThumbnailUrl',message:'input params',data:{targetUrl,overrideMode:overrides.mode,sanitizedMode:sanitizeMode(overrides.mode)},hypothesisId:'H1',timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+
+
   const expires = Date.now() + 15 * 60 * 1000
+  const origin = extractOrigin(targetUrl)
 
   const params: ThumbnailParams = {
-    url: targetUrl,
-    mode: overrides.mode ?? 'crop',
+    url: origin,
+    mode: sanitizeMode(overrides.mode),
     fill: overrides.fill ?? 'solid',
     format: overrides.format ?? 'webp',
     width: overrides.width ?? '56',
@@ -52,7 +74,13 @@ export async function createSignedThumbnailUrl(
   const searchParams = new URLSearchParams(params)
   searchParams.set('token', token)
 
-  return `${THUMBNAIL_ENDPOINT}?${searchParams.toString()}`
+  const finalUrl = `${THUMBNAIL_ENDPOINT}?${searchParams.toString()}`
+
+  // #region agent log
+  fetch('http://127.0.0.1:7930/ingest/3e15f807-ca65-47b7-8783-7b9371ab37ba',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'34130b'},body:JSON.stringify({sessionId:'34130b',location:'thumbnail.ts:finalUrl',message:'signed url generated',data:{origin,canonicalString,finalUrl},hypothesisId:'H1',timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+
+  return finalUrl
 }
 
 async function signHmacSha256Hex(secret: string, input: string): Promise<string> {

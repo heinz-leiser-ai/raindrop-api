@@ -1,15 +1,30 @@
 import { getEnv } from './env.ts'
 
-const ALLOWED_ORIGINS = getEnv('ALLOWED_ORIGINS')?.split(',') ?? [
+const DEFAULT_ORIGINS = [
   'http://localhost:2000',
   'http://localhost:3000',
   'http://localhost:8080',
   'https://project-fijck.vercel.app',
 ]
 
+const ALLOWED_ORIGINS: string[] = (() => {
+  const raw = getEnv('ALLOWED_ORIGINS')
+  if (!raw) return DEFAULT_ORIGINS
+  const parsed = raw.split(',').map((o) => o.trim()).filter((o) => o && o !== '*')
+  return parsed.length ? parsed : DEFAULT_ORIGINS
+})()
+
+function isAllowedOrigin(origin: string): boolean {
+  if (ALLOWED_ORIGINS.includes(origin)) return true
+  if (origin.startsWith('chrome-extension://')) return true
+  if (origin.startsWith('moz-extension://')) return true
+  if (origin.startsWith('safari-web-extension://')) return true
+  return false
+}
+
 export const corsHeaders = (origin?: string | null): Record<string, string> => {
   const effectiveOrigin =
-    origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]
+    origin && isAllowedOrigin(origin) ? origin : ALLOWED_ORIGINS[0]
 
   return {
     'Access-Control-Allow-Origin': effectiveOrigin,

@@ -36,11 +36,21 @@ export async function handleThumbnailRoutes(req: Request, path: string): Promise
     quality: url.searchParams.get('quality') ?? undefined,
   })
 
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: signedUrl,
+  try {
+    const upstream = await fetch(signedUrl)
+    if (!upstream.ok) {
+      return errorResponse(req, upstream.status, 'thumbnail_error', 'Thumbnail service error')
+    }
+
+    const headers: Record<string, string> = {
       ...corsHeaders(req.headers.get('origin')),
-    },
-  })
+      'Cache-Control': 'public, max-age=86400',
+    }
+    const ct = upstream.headers.get('content-type')
+    if (ct) headers['Content-Type'] = ct
+
+    return new Response(upstream.body, { status: 200, headers })
+  } catch {
+    return errorResponse(req, 502, 'thumbnail_error', 'Failed to fetch thumbnail')
+  }
 }
