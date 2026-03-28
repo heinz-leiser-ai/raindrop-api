@@ -22,7 +22,8 @@ Wir bauen ein self-hosted, Raindrop-kompatibles Backend auf Supabase, damit Lese
 | P1 | RDBE-9 | Highlights | Text-Highlights an Bookmarks speichern/lesen | Planned |
 | P1 | RDBE-10 | Sharing & Collaboration | Collections teilen, Rollen, Einladungen | Planned |
 | P1 | RDBE-11 | Backups | Automatisierte und manuelle Backup-Objekte | Planned |
-| P2 | RDBE-12 | AI Suggestions/Stella | AI-Features spaeter als separater Block | Planned |
+| P0 | RDBE-12 | Token-basierte Auth | Token statt Cookie fuer persistente Sessions (WebApp + Extension) | Planned |
+| P2 | RDBE-13 | AI Suggestions/Stella | AI-Features spaeter als separater Block | Planned |
 
 ## Success Metrics
 - 95%+ der im Frontend genutzten `v1` Calls antworten kompatibel (Schema + Semantik)
@@ -34,7 +35,7 @@ Wir bauen ein self-hosted, Raindrop-kompatibles Backend auf Supabase, damit Lese
 - Backend-only Scope: Frontend wird geforkt und nur minimal konfiguriert
 - Keine oeffentliche Massen-Registrierung im MVP
 - Hosting-Entscheid zwischen self-hosted Supabase und Supabase Cloud EU ist offen
-- API muss mit Cookie-/Session-Verhalten des bestehenden Frontends kompatibel sein (`credentials: include`)
+- API muss mit Cookie-/Session-Verhalten des bestehenden Frontends kompatibel sein (`credentials: include`), Token-Auth wird parallel eingefuehrt (RDBE-12)
 
 ## Non-Goals
 - Kein Mobile-Neubau (iOS/Android out of scope)

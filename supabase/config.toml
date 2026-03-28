@@ -19,8 +19,11 @@ verify_jwt = false
 [auth]
 site_url = "http://localhost:3000"
 additional_redirect_urls = ["http://localhost:3000"]
+# Access-Token-Lebensdauer (Sekunden). RDBE-12: Frontend nutzt refresh_token + POST auth/refresh bei Ablauf.
 jwt_expiry = 3600
 enable_signup = false
+# Refresh-Token-Rotation und maximale Refresh-Lebensdauer: in Self-Hosted/Cloud unter Authentication > Settings,
+# ggf. [auth] in produktiver config.toml (GoTrue-ENV) setzen — siehe Supabase-Doku zu refresh_token.
 
 [auth.external.google]
 enabled = true

@@ -1,7 +1,7 @@
 # Feature Index
 
 **Project:** Raindrop Self-hosted Backend (Supabase)  
-**Next Available ID:** RDBE-12
+**Next Available ID:** RDBE-13
 
 
 | ID      | Name                        | Priority | Status  | Hauptpfade                                                           | Kurzbeschreibung                                      |
@@ -17,6 +17,7 @@
 | RDBE-9  | Highlights                  | P1       | QA Passed | `v1/highlights.md`, `src/data/sagas/bookmarks/highlights.js`         | Highlights speichern und abrufen                      |
 | RDBE-10 | Sharing & Collaboration     | P1       | In Review | `v1/collections/sharing.md`, `src/data/sagas/collections/sharing.js` | Collections teilen, Nutzerrollen, Join-Token          |
 | RDBE-11 | Backups                     | P1       | In Review | `v1/backups.md`, `src/data/sagas/backups.js`                         | Backup-Objekte erzeugen und abrufen                   |
+| RDBE-12 | Token-basierte Auth         | P0       | In Review | `v1/authentication/`, `supabase/functions/api/routes/auth.ts`        | Token statt Cookie fuer persistente Sessions          |
 
 
 ## Empfohlene Build-Reihenfolge

@@ -1,7 +1,39 @@
 import { createAnonClient, createServiceClient, createUserClient, getUser } from '../../_shared/supabase.ts'
-import { jsonResponse, errorResponse, unauthorizedResponse } from '../../_shared/response.ts'
+import { jsonResponse, errorResponse } from '../../_shared/response.ts'
 import { corsHeaders } from '../../_shared/cors.ts'
 import { getEnv } from '../../_shared/env.ts'
+
+type SessionTokens = {
+  access_token: string
+  refresh_token: string
+  expires_in?: number
+}
+
+function tokenJsonBody(session: SessionTokens, extra: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    result: true,
+    token: session.access_token,
+    refresh_token: session.refresh_token,
+    ...extra,
+  })
+}
+
+/** RDBE-12: HttpOnly cookies + gleiche Attribute wie emailLogin */
+function appendSessionCookies(headers: Headers, session: SessionTokens) {
+  const secure = getEnv('COOKIE_SECURE') !== 'false'
+  const domain = getEnv('COOKIE_DOMAIN') ?? ''
+  const domainAttr = domain ? `; Domain=${domain}` : ''
+  const sameSite = getEnv('COOKIE_SAMESITE') ?? 'None'
+  const expiresIn = session.expires_in ?? 3600
+  headers.append(
+    'Set-Cookie',
+    `sb-access-token=${session.access_token}; Path=/; HttpOnly; SameSite=${sameSite}${sameSite === 'None' ? '; Secure' : (secure ? '; Secure' : '')}${domainAttr}; Max-Age=${expiresIn}`
+  )
+  headers.append(
+    'Set-Cookie',
+    `sb-refresh-token=${session.refresh_token}; Path=/; HttpOnly; SameSite=${sameSite}${sameSite === 'None' ? '; Secure' : (secure ? '; Secure' : '')}${domainAttr}; Max-Age=604800`
+  )
+}
 
 export async function handleAuthRoutes(req: Request, path: string): Promise<Response> {
   switch (path) {
@@ -17,6 +49,8 @@ export async function handleAuthRoutes(req: Request, path: string): Promise<Resp
       return await logout(req)
     case 'auth/jwt':
       return await jwtLogin(req)
+    case 'auth/refresh':
+      return await refreshTokens(req)
     default:
       if (path.match(/^auth\/\w+\/native/)) {
         return await oauthNative(req, path)
@@ -71,19 +105,7 @@ async function emailLogin(req: Request): Promise<Response> {
   })
 
   if (data.session) {
-    const secure = getEnv('COOKIE_SECURE') !== 'false'
-    const domain = getEnv('COOKIE_DOMAIN') ?? ''
-    const domainAttr = domain ? `; Domain=${domain}` : ''
-
-    const sameSite = getEnv('COOKIE_SAMESITE') ?? 'None'
-    headers.append(
-      'Set-Cookie',
-      `sb-access-token=${data.session.access_token}; Path=/; HttpOnly; SameSite=${sameSite}${sameSite === 'None' ? '; Secure' : (secure ? '; Secure' : '')}${domainAttr}; Max-Age=${data.session.expires_in}`
-    )
-    headers.append(
-      'Set-Cookie',
-      `sb-refresh-token=${data.session.refresh_token}; Path=/; HttpOnly; SameSite=${sameSite}${sameSite === 'None' ? '; Secure' : (secure ? '; Secure' : '')}${domainAttr}; Max-Age=604800`
-    )
+    appendSessionCookies(headers, data.session)
   }
 
   const contentType = (req.headers.get('content-type') ?? '').toLowerCase()
@@ -98,7 +120,11 @@ async function emailLogin(req: Request): Promise<Response> {
     return new Response(null, { status: 302, headers })
   }
 
-  return new Response(JSON.stringify({ result: true }), { status: 200, headers })
+  if (!data.session) {
+    return new Response(JSON.stringify({ result: true }), { status: 200, headers })
+  }
+
+  return new Response(tokenJsonBody(data.session), { status: 200, headers })
 }
 
 async function emailSignup(req: Request): Promise<Response> {
@@ -211,11 +237,9 @@ async function logout(req: Request): Promise<Response> {
     return errorResponse(req, 405, 'method_not_allowed')
   }
 
-  const cookies = req.headers.get('cookie') ?? ''
-  const accessToken = cookies.match(/sb-access-token=([^;]*)/)?.[1] ?? null
-
-  if (accessToken) {
-    const userClient = createUserClient(req)
+  const userClient = createUserClient(req)
+  const { data: { user } } = await userClient.auth.getUser()
+  if (user) {
     await userClient.auth.signOut({ scope: 'global' })
   }
 
@@ -261,13 +285,44 @@ async function jwtLogin(req: Request): Promise<Response> {
     ...corsHeaders(origin),
   })
 
-  const secure = getEnv('COOKIE_SECURE') !== 'false'
-  headers.append(
-    'Set-Cookie',
-    `sb-access-token=${data.session.access_token}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}; Max-Age=${data.session.expires_in}`
-  )
+  appendSessionCookies(headers, data.session)
 
-  return new Response(JSON.stringify({ result: true }), { status: 200, headers })
+  return new Response(tokenJsonBody(data.session), { status: 200, headers })
+}
+
+async function refreshTokens(req: Request): Promise<Response> {
+  if (req.method !== 'POST') {
+    return errorResponse(req, 405, 'method_not_allowed')
+  }
+
+  let body: Record<string, unknown>
+  try {
+    body = await req.json()
+  } catch {
+    return errorResponse(req, 400, 'invalid_body', 'JSON body required')
+  }
+
+  const refresh_token = typeof body.refresh_token === 'string' ? body.refresh_token : ''
+  if (!refresh_token) {
+    return errorResponse(req, 400, 'missing_fields', 'refresh_token required')
+  }
+
+  const supabase = createAnonClient()
+  const { data, error } = await supabase.auth.refreshSession({ refresh_token })
+
+  if (error || !data.session) {
+    return errorResponse(req, 401, 'unauthorized', error?.message ?? 'Invalid or expired refresh token')
+  }
+
+  const origin = req.headers.get('origin')
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    ...corsHeaders(origin),
+  })
+
+  appendSessionCookies(headers, data.session)
+
+  return new Response(tokenJsonBody(data.session), { status: 200, headers })
 }
 
 async function oauthNative(req: Request, path: string): Promise<Response> {
@@ -305,11 +360,7 @@ async function oauthNative(req: Request, path: string): Promise<Response> {
     ...corsHeaders(origin),
   })
 
-  const secure = getEnv('COOKIE_SECURE') !== 'false'
-  headers.append(
-    'Set-Cookie',
-    `sb-access-token=${data.session.access_token}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}; Max-Age=${data.session.expires_in}`
-  )
+  appendSessionCookies(headers, data.session)
 
-  return new Response(JSON.stringify({ result: true, auth: true }), { status: 200, headers })
+  return new Response(tokenJsonBody(data.session, { auth: true }), { status: 200, headers })
 }
