@@ -40,6 +40,19 @@ export async function handleLinkCheckRoutes(req: Request, path: string): Promise
     return await clearJournal(req, service, userId)
   }
 
+  if (path === 'link-check/runs' && req.method === 'GET') {
+    return await listRuns(req, service, userId)
+  }
+
+  if (path === 'link-check/cancel' && req.method === 'POST') {
+    const body = await req.json().catch(() => ({}))
+    return await cancelRun(req, service, userId, parseInt(body.runId) || 0)
+  }
+
+  if (path === 'link-check/runs' && req.method === 'DELETE') {
+    return await cleanRuns(req, service, userId)
+  }
+
   return errorResponse(req, 404, 'not_found', `Link-check route not found: ${path}`)
 }
 
@@ -314,6 +327,79 @@ async function clearJournal(
     .from('link_check_journal')
     .delete()
     .eq('user_id', userId)
+
+  if (error) {
+    return errorResponse(req, 500, 'db_error', error.message)
+  }
+
+  return jsonResponse({ result: true }, req)
+}
+
+// ─── Runs Management ─────────────────────────────────────
+
+async function listRuns(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number
+): Promise<Response> {
+  const { data, error } = await service
+    .from('link_check_runs')
+    .select('*')
+    .eq('user_id', userId)
+    .order('started_at', { ascending: false })
+    .limit(20)
+
+  if (error) {
+    return errorResponse(req, 500, 'db_error', error.message)
+  }
+
+  const runs = (data ?? []).map((r) => ({
+    id: r.id,
+    status: r.status,
+    total: r.total,
+    checked: r.checked,
+    brokenCount: r.broken_count,
+    startedAt: r.started_at,
+    finishedAt: r.finished_at,
+  }))
+
+  return jsonResponse({ result: true, runs }, req)
+}
+
+async function cancelRun(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  runId: number
+): Promise<Response> {
+  if (!runId) {
+    return errorResponse(req, 400, 'missing_param', 'runId required')
+  }
+
+  const { error } = await service
+    .from('link_check_runs')
+    .update({ status: 'cancelled', finished_at: new Date().toISOString() })
+    .eq('id', runId)
+    .eq('user_id', userId)
+    .eq('status', 'running')
+
+  if (error) {
+    return errorResponse(req, 500, 'db_error', error.message)
+  }
+
+  return jsonResponse({ result: true }, req)
+}
+
+async function cleanRuns(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number
+): Promise<Response> {
+  const { error } = await service
+    .from('link_check_runs')
+    .delete()
+    .eq('user_id', userId)
+    .in('status', ['failed', 'cancelled'])
 
   if (error) {
     return errorResponse(req, 500, 'db_error', error.message)
