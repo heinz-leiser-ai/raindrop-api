@@ -86,6 +86,7 @@ async function startCheck(
     .eq('user_id', userId)
     .neq('collection_id', -99)
     .neq('link', '')
+    .limit(10000)
 
   if (collectionIds && collectionIds.length > 0) {
     query = query.in('collection_id', collectionIds)
