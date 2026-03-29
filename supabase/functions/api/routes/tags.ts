@@ -79,7 +79,8 @@ async function getRecentTags(
     if (tagSet.size >= 30) break
   }
 
-  return jsonResponse({ result: true, items: [...tagSet] }, req)
+  const items = [...tagSet].map(tag => ({ _id: tag, count: 0 }))
+  return jsonResponse({ result: true, items }, req)
 }
 
 async function renameTags(
@@ -186,7 +187,7 @@ async function getFilters(
 
   let query = service
     .from('raindrops')
-    .select('tags, type, domain, important')
+    .select('tags, type, domain, important, broken')
     .eq('user_id', userId)
 
   if (collectionId === 0) {
@@ -221,6 +222,7 @@ async function getFilters(
       domainCounts[row.domain] = (domainCounts[row.domain] ?? 0) + 1
     }
     if (row.important) importantCount++
+    if (row.broken) brokenCount++
   }
 
   let tags = Object.entries(tagCounts).map(([_id, count]) => ({ _id, count }))

@@ -52,7 +52,7 @@ export async function getProfile(req: Request) {
   return {
     _id: profile.integer_id,
     email: user.email,
-    fullName: profile.full_name ?? '',
+    name: profile.full_name ?? '',
     avatar: profile.avatar ?? '',
     pro: true,
     config: profile.config ?? {},

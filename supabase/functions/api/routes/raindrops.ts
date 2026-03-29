@@ -102,6 +102,7 @@ function formatRaindrop(row: Record<string, unknown>) {
     important: row.important ?? false,
     order: row.order ?? 0,
     removed: row.removed ?? false,
+    broken: row.broken ?? false,
     highlights: row.highlights ?? [],
     reminder: row.reminder ?? null,
     file: row.file ?? null,
@@ -266,12 +267,17 @@ async function deleteRaindrop(
 ): Promise<Response> {
   const { data: existing } = await service
     .from('raindrops')
-    .select('collection_id')
+    .select('collection_id, broken, title, link')
     .eq('_id', id)
     .eq('user_id', userId)
     .single()
 
   if (!existing) return errorResponse(req, 404, 'not_found', 'Raindrop not found')
+
+  // Journal entry for broken bookmarks (only on first delete, not from trash)
+  if (existing.broken && existing.collection_id !== -99) {
+    await writeBrokenJournal(service, userId, existing.title, existing.link, existing.collection_id)
+  }
 
   // Already in trash -> permanent delete
   if (existing.collection_id === -99) {
@@ -338,6 +344,8 @@ async function listRaindrops(
       query = query.eq('domain', search.slice(7))
     } else if (search.startsWith('important:')) {
       query = query.eq('important', search.slice(10) === 'true')
+    } else if (search.startsWith('broken:')) {
+      query = query.eq('broken', search.slice(7).trim() === 'true')
     } else {
       query = query.textSearch('search_vector', search.split(/\s+/).join(' & '), { type: 'plain' })
     }
@@ -469,6 +477,11 @@ async function batchDeleteRaindrops(
 ): Promise<Response> {
   const body = await req.json().catch(() => ({}))
   const ids: number[] | undefined = body.ids
+
+  // Journal entries for broken bookmarks (only on first delete, not from trash)
+  if (collectionId !== -99) {
+    await writeBrokenJournalBatch(service, userId, collectionId, ids)
+  }
 
   if (collectionId === -99) {
     // Permanent delete from trash
@@ -827,4 +840,77 @@ async function getCollectionDescendantIds(
     ids.map((id) => getCollectionDescendantIds(service, userId, id))
   )
   return [...ids, ...nested.flat()]
+}
+
+// ─── Broken Journal Helpers ─────────────────────────────
+
+async function writeBrokenJournal(
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  title: string,
+  url: string,
+  collectionId: number
+) {
+  let collectionName = ''
+  if (collectionId > 0) {
+    const { data: col } = await service
+      .from('collections')
+      .select('title')
+      .eq('_id', collectionId)
+      .single()
+    collectionName = col?.title ?? ''
+  }
+
+  await service.from('link_check_journal').insert({
+    user_id: userId,
+    bookmark_title: title ?? '',
+    url: url ?? '',
+    collection_name: collectionName,
+  })
+}
+
+async function writeBrokenJournalBatch(
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  collectionId: number,
+  ids?: number[]
+) {
+  let query = service
+    .from('raindrops')
+    .select('title, link, collection_id')
+    .eq('user_id', userId)
+    .eq('broken', true)
+
+  if (ids?.length) {
+    query = query.in('_id', ids)
+  } else if (collectionId !== 0) {
+    query = query.eq('collection_id', collectionId)
+  }
+
+  const { data: brokenItems } = await query
+
+  if (!brokenItems?.length) return
+
+  const collectionIds = [...new Set(brokenItems.map((b) => b.collection_id).filter((id) => id > 0))]
+  const collectionNames: Record<number, string> = {}
+
+  if (collectionIds.length) {
+    const { data: cols } = await service
+      .from('collections')
+      .select('_id, title')
+      .in('_id', collectionIds)
+
+    for (const col of cols ?? []) {
+      collectionNames[col._id] = col.title
+    }
+  }
+
+  const inserts = brokenItems.map((b) => ({
+    user_id: userId,
+    bookmark_title: b.title ?? '',
+    url: b.link ?? '',
+    collection_name: collectionNames[b.collection_id] ?? '',
+  }))
+
+  await service.from('link_check_journal').insert(inserts)
 }

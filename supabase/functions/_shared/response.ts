@@ -32,5 +32,5 @@ export function errorResponse(
 }
 
 export function unauthorizedResponse(req: Request): Response {
-  return jsonResponse({ auth: false, result: false }, req, 200)
+  return jsonResponse({ auth: false, result: false }, req, 401)
 }

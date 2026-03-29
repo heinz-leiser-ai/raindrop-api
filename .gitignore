@@ -7,3 +7,5 @@ supabase/.temp/
 
 .DS_Store
 *.log
+
+raindrop-api.code-workspace
