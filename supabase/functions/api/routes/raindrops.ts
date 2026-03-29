@@ -1,6 +1,7 @@
 import { createServiceClient, getUser } from '../../_shared/supabase.ts'
 import { jsonResponse, errorResponse, unauthorizedResponse } from '../../_shared/response.ts'
 import { getEnv } from '../../_shared/env.ts'
+import { writeMoveJournal, resolveCollectionName } from './moveJournal.ts'
 
 export async function handleRaindropRoutes(req: Request, path: string): Promise<Response> {
   const user = await getUser(req)
@@ -170,6 +171,19 @@ async function createRaindrop(
 
   if (error) return errorResponse(req, 400, 'create_failed', error.message)
 
+  const colId = data.collection_id ?? -1
+  const colName = await resolveCollectionName(service, userId, colId)
+  writeMoveJournal(service, userId, {
+    action: 'create',
+    object_type: 'bookmark',
+    object_id: data._id,
+    object_title: data.title ?? '',
+    from_collection_id: null,
+    from_collection_name: '',
+    to_collection_id: colId,
+    to_collection_name: colName,
+  })
+
   return jsonResponse({ result: true, item: formatRaindrop(data) }, req)
 }
 
@@ -245,6 +259,20 @@ async function updateRaindrop(
     return errorResponse(req, 400, 'no_changes', 'No fields to update')
   }
 
+  let oldCollectionId: number | null = null
+  let oldTitle = ''
+  const collectionChanged = updates.collection_id !== undefined
+  if (collectionChanged) {
+    const { data: before } = await service
+      .from('raindrops')
+      .select('collection_id, title')
+      .eq('_id', id)
+      .eq('user_id', userId)
+      .single()
+    oldCollectionId = before?.collection_id ?? null
+    oldTitle = before?.title ?? ''
+  }
+
   const { data, error } = await service
     .from('raindrops')
     .update(updates)
@@ -255,6 +283,29 @@ async function updateRaindrop(
 
   if (error) return errorResponse(req, 400, 'update_failed', error.message)
   if (!data) return errorResponse(req, 404, 'not_found', 'Raindrop not found')
+
+  if (collectionChanged && oldCollectionId !== null && oldCollectionId !== data.collection_id) {
+    const newColId = data.collection_id as number
+    let action = 'move'
+    if (newColId === -99) action = 'trash'
+    else if (oldCollectionId === -99) action = 'restore'
+
+    const [fromName, toName] = await Promise.all([
+      resolveCollectionName(service, userId, oldCollectionId),
+      resolveCollectionName(service, userId, newColId),
+    ])
+
+    writeMoveJournal(service, userId, {
+      action,
+      object_type: 'bookmark',
+      object_id: data._id,
+      object_title: data.title ?? oldTitle,
+      from_collection_id: oldCollectionId,
+      from_collection_name: fromName,
+      to_collection_id: newColId,
+      to_collection_name: toName,
+    })
+  }
 
   return jsonResponse({ result: true, item: formatRaindrop(data) }, req)
 }
@@ -283,12 +334,24 @@ async function deleteRaindrop(
   if (existing.collection_id === -99) {
     await service.from('raindrops').delete().eq('_id', id).eq('user_id', userId)
   } else {
+    const fromName = await resolveCollectionName(service, userId, existing.collection_id)
     // Move to trash
     await service
       .from('raindrops')
       .update({ collection_id: -99, removed: true })
       .eq('_id', id)
       .eq('user_id', userId)
+
+    writeMoveJournal(service, userId, {
+      action: 'trash',
+      object_type: 'bookmark',
+      object_id: id,
+      object_title: existing.title ?? '',
+      from_collection_id: existing.collection_id,
+      from_collection_name: fromName,
+      to_collection_id: -99,
+      to_collection_name: 'Trash',
+    })
   }
 
   return jsonResponse({ result: true }, req)
@@ -449,6 +512,20 @@ async function batchUpdateRaindrops(
   if (body.excerpt !== undefined) updates.excerpt = body.excerpt
   if (body.pleaseParse !== undefined) updates.pleaseparse = body.pleaseParse
 
+  const collectionChanged = updates.collection_id !== undefined
+  let affectedBookmarks: Array<{ _id: number; title: string; collection_id: number }> = []
+
+  if (collectionChanged) {
+    let fetchQ = service
+      .from('raindrops')
+      .select('_id, title, collection_id')
+      .eq('user_id', userId)
+    if (ids?.length) fetchQ = fetchQ.in('_id', ids)
+    else if (collectionId !== 0) fetchQ = fetchQ.eq('collection_id', collectionId)
+    const { data: before } = await fetchQ.limit(500)
+    affectedBookmarks = before ?? []
+  }
+
   let query = service
     .from('raindrops')
     .update(updates)
@@ -463,6 +540,32 @@ async function batchUpdateRaindrops(
   const { error } = await query
 
   if (error) return errorResponse(req, 400, 'update_failed', error.message)
+
+  if (collectionChanged && affectedBookmarks.length > 0) {
+    const newColId = updates.collection_id as number
+    const batchId = crypto.randomUUID()
+    const toName = await resolveCollectionName(service, userId, newColId)
+
+    for (const bm of affectedBookmarks) {
+      if (bm.collection_id === newColId) continue
+      let action = 'move'
+      if (newColId === -99) action = 'trash'
+      else if (bm.collection_id === -99) action = 'restore'
+
+      const fromName = await resolveCollectionName(service, userId, bm.collection_id)
+      writeMoveJournal(service, userId, {
+        action,
+        object_type: 'bookmark',
+        object_id: bm._id,
+        object_title: bm.title ?? '',
+        from_collection_id: bm.collection_id,
+        from_collection_name: fromName,
+        to_collection_id: newColId,
+        to_collection_name: toName,
+        batch_id: batchId,
+      })
+    }
+  }
 
   return jsonResponse({ result: true }, req)
 }
@@ -484,13 +587,19 @@ async function batchDeleteRaindrops(
   }
 
   if (collectionId === -99) {
-    // Permanent delete from trash
     let query = service.from('raindrops').delete().eq('user_id', userId).eq('collection_id', -99)
     if (ids?.length) query = query.in('_id', ids)
     const { error } = await query
     if (error) return errorResponse(req, 400, 'delete_failed', error.message)
   } else {
-    // Move to trash
+    let fetchQ = service
+      .from('raindrops')
+      .select('_id, title, collection_id')
+      .eq('user_id', userId)
+    if (ids?.length) fetchQ = fetchQ.in('_id', ids)
+    else if (collectionId !== 0) fetchQ = fetchQ.eq('collection_id', collectionId)
+    const { data: affected } = await fetchQ.limit(500)
+
     let query = service
       .from('raindrops')
       .update({ collection_id: -99, removed: true })
@@ -504,6 +613,24 @@ async function batchDeleteRaindrops(
 
     const { error } = await query
     if (error) return errorResponse(req, 400, 'delete_failed', error.message)
+
+    if (affected?.length) {
+      const batchId = crypto.randomUUID()
+      for (const bm of affected) {
+        const fromName = await resolveCollectionName(service, userId, bm.collection_id)
+        writeMoveJournal(service, userId, {
+          action: 'trash',
+          object_type: 'bookmark',
+          object_id: bm._id,
+          object_title: bm.title ?? '',
+          from_collection_id: bm.collection_id,
+          from_collection_name: fromName,
+          to_collection_id: -99,
+          to_collection_name: 'Trash',
+          batch_id: batchId,
+        })
+      }
+    }
   }
 
   return jsonResponse({ result: true }, req)

@@ -1,6 +1,7 @@
 import { createServiceClient, getUser } from '../../_shared/supabase.ts'
 import { jsonResponse, errorResponse, unauthorizedResponse } from '../../_shared/response.ts'
 import { getEnv } from '../../_shared/env.ts'
+import { writeMoveJournal, resolveCollectionName } from './moveJournal.ts'
 
 export async function handleCollectionRoutes(req: Request, path: string): Promise<Response> {
   const user = await getUser(req)
@@ -193,6 +194,21 @@ async function createCollection(
 
   if (error) return errorResponse(req, 400, 'create_failed', error.message)
 
+  const parentId = (data.parent_id as number | null) ?? null
+  const parentName = parentId
+    ? await resolveCollectionName(service, userId, parentId)
+    : 'Root'
+  writeMoveJournal(service, userId, {
+    action: 'create',
+    object_type: 'collection',
+    object_id: data._id,
+    object_title: data.title ?? '',
+    from_collection_id: null,
+    from_collection_name: '',
+    to_collection_id: parentId,
+    to_collection_name: parentName,
+  })
+
   return jsonResponse({ result: true, item: formatCollection(data, userId) }, req)
 }
 
@@ -236,6 +252,20 @@ async function updateCollection(
     }
   }
 
+  const parentChanged = updates.parent_id !== undefined
+  let oldParentId: number | null = null
+  let collectionTitle = ''
+  if (parentChanged) {
+    const { data: before } = await service
+      .from('collections')
+      .select('parent_id, title')
+      .eq('_id', id)
+      .eq('user_id', userId)
+      .single()
+    oldParentId = before?.parent_id ?? null
+    collectionTitle = before?.title ?? ''
+  }
+
   const { data, error } = await service
     .from('collections')
     .update(updates)
@@ -246,6 +276,26 @@ async function updateCollection(
 
   if (error) return errorResponse(req, 400, 'update_failed', error.message)
   if (!data) return errorResponse(req, 404, 'not_found', 'Collection not found')
+
+  if (parentChanged) {
+    const newParentId = (data.parent_id as number | null) ?? null
+    if (oldParentId !== newParentId) {
+      const [fromName, toName] = await Promise.all([
+        resolveCollectionName(service, userId, oldParentId),
+        resolveCollectionName(service, userId, newParentId),
+      ])
+      writeMoveJournal(service, userId, {
+        action: 'move',
+        object_type: 'collection',
+        object_id: id,
+        object_title: data.title ?? collectionTitle,
+        from_collection_id: oldParentId,
+        from_collection_name: fromName || 'Root',
+        to_collection_id: newParentId,
+        to_collection_name: toName || 'Root',
+      })
+    }
+  }
 
   return jsonResponse({ result: true, item: formatCollection(data, userId) }, req)
 }
@@ -266,7 +316,13 @@ async function deleteCollection(
     return jsonResponse({ result: true }, req)
   }
 
-  // Raindrops dieser Collection (und Kinder) nach Trash verschieben
+  const { data: colData } = await service
+    .from('collections')
+    .select('title, parent_id')
+    .eq('_id', id)
+    .eq('user_id', userId)
+    .single()
+
   const childIds = await getDescendantIds(service, userId, id)
   const allIds = [id, ...childIds]
 
@@ -276,7 +332,6 @@ async function deleteCollection(
     .in('collection_id', allIds)
     .eq('user_id', userId)
 
-  // Collection und Kinder loeschen (CASCADE)
   const { error } = await service
     .from('collections')
     .delete()
@@ -284,6 +339,22 @@ async function deleteCollection(
     .eq('user_id', userId)
 
   if (error) return errorResponse(req, 400, 'delete_failed', error.message)
+
+  if (colData) {
+    const fromName = colData.parent_id
+      ? await resolveCollectionName(service, userId, colData.parent_id)
+      : 'Root'
+    writeMoveJournal(service, userId, {
+      action: 'trash',
+      object_type: 'collection',
+      object_id: id,
+      object_title: colData.title ?? '',
+      from_collection_id: colData.parent_id ?? null,
+      from_collection_name: fromName,
+      to_collection_id: -99,
+      to_collection_name: 'Trash',
+    })
+  }
 
   return jsonResponse({ result: true }, req)
 }

@@ -10,6 +10,7 @@ import { handleHighlightRoutes } from './routes/highlights.ts'
 import { handleBackupRoutes } from './routes/backups.ts'
 import { handleThumbnailRoutes } from './routes/thumbnail.ts'
 import { handleLinkCheckRoutes } from './routes/linkCheck.ts'
+import { handleMoveJournalRoutes } from './routes/moveJournal.ts'
 
 Deno.serve(async (req) => {
   const corsResponse = handleCors(req)
@@ -62,6 +63,10 @@ Deno.serve(async (req) => {
 
     if (path.startsWith('link-check/')) {
       return await handleLinkCheckRoutes(req, path)
+    }
+
+    if (path.startsWith('move-journal')) {
+      return await handleMoveJournalRoutes(req, path)
     }
 
     return errorResponse(req, 404, 'not_found', `Route not found: ${path}`)
