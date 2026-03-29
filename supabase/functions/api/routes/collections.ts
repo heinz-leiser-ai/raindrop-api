@@ -132,7 +132,17 @@ async function getAllCollections(
 
   const items = (data ?? []).map((row) => formatCollection(row, userId))
 
-  return jsonResponse({ result: true, items }, req)
+  const totalCount = items.reduce((sum, c) => sum + (c.count ?? 0), 0)
+  const unsortedCount = await getSystemCollectionCount(service, userId, -1)
+  const trashCount = await getSystemCollectionCount(service, userId, -99)
+
+  const systemCollections = [
+    { _id: 0, title: 'All', count: totalCount, access: { level: 4, draggable: false }, author: true, view: 'list', public: false, expanded: false, sort: 0, color: '', cover: [] },
+    { _id: -1, title: 'Unsorted', count: unsortedCount, access: { level: 4, draggable: false }, author: true, view: 'list', public: false, expanded: false, sort: 0, color: '', cover: [] },
+    { _id: -99, title: 'Trash', count: trashCount, access: { level: 4, draggable: false }, author: true, view: 'list', public: false, expanded: false, sort: 0, color: '', cover: [] },
+  ]
+
+  return jsonResponse({ result: true, items: [...systemCollections, ...items] }, req)
 }
 
 async function getCollection(
@@ -679,4 +689,18 @@ async function getDescendantIds(
     ids.map((id) => getDescendantIds(service, userId, id))
   )
   return [...ids, ...nested.flat()]
+}
+
+async function getSystemCollectionCount(
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  collectionId: number
+): Promise<number> {
+  const { count } = await service
+    .from('raindrops')
+    .select('_id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('collection_id', collectionId)
+
+  return count ?? 0
 }

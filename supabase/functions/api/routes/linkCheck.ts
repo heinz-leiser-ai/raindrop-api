@@ -4,6 +4,7 @@ import { jsonResponse, errorResponse, unauthorizedResponse } from '../../_shared
 const BATCH_SIZE = 5
 const BATCH_DELAY_MS = 200
 const REQUEST_TIMEOUT_MS = 10000
+const STALE_RUN_MINUTES = 30
 const USER_AGENT = 'Mozilla/5.0 (compatible; RaindropLinkChecker/1.0)'
 
 export async function handleLinkCheckRoutes(req: Request, path: string): Promise<Response> {
@@ -51,29 +52,51 @@ async function startCheck(
 ): Promise<Response> {
   const { data: activeRun } = await service
     .from('link_check_runs')
-    .select('id')
+    .select('id, started_at')
     .eq('user_id', userId)
     .eq('status', 'running')
     .limit(1)
     .single()
 
   if (activeRun) {
-    return errorResponse(req, 409, 'already_running', 'A link check is already running')
+    const startedAt = new Date(activeRun.started_at).getTime()
+    const staleAfter = STALE_RUN_MINUTES * 60 * 1000
+    if (Date.now() - startedAt > staleAfter) {
+      await service
+        .from('link_check_runs')
+        .update({ status: 'failed', finished_at: new Date().toISOString() })
+        .eq('id', activeRun.id)
+    } else {
+      return errorResponse(req, 409, 'already_running', 'A link check is already running')
+    }
   }
 
   const body = await req.json().catch(() => ({}))
   const brokenLevel: string = body.broken_level || 'default'
+  const skipDays: number = parseInt(body.skip_days) || 0
+  const collectionIds: number[] | undefined = Array.isArray(body.collection_ids) ? body.collection_ids.map(Number).filter(Boolean) : undefined
 
   if (brokenLevel === 'off') {
     return errorResponse(req, 400, 'disabled', 'Link checking is disabled')
   }
 
-  const { data: bookmarks, error: loadError } = await service
+  let query = service
     .from('raindrops')
     .select('_id, link, collection_id')
     .eq('user_id', userId)
     .neq('collection_id', -99)
     .neq('link', '')
+
+  if (collectionIds && collectionIds.length > 0) {
+    query = query.in('collection_id', collectionIds)
+  }
+
+  if (skipDays > 0) {
+    const cutoff = new Date(Date.now() - skipDays * 24 * 60 * 60 * 1000).toISOString()
+    query = query.or(`last_checked.is.null,last_checked.lt.${cutoff}`)
+  }
+
+  const { data: bookmarks, error: loadError } = await query
 
   if (loadError) {
     return errorResponse(req, 500, 'db_error', loadError.message)
@@ -122,11 +145,12 @@ async function processBookmarks(
         batch.map((b) => checkUrl(b.link, brokenLevel))
       )
 
+      const now = new Date().toISOString()
       for (let j = 0; j < batch.length; j++) {
         const isBroken = results[j]
         await service
           .from('raindrops')
-          .update({ broken: isBroken })
+          .update({ broken: isBroken, last_checked: now })
           .eq('_id', batch[j]._id)
           .eq('user_id', userId)
 

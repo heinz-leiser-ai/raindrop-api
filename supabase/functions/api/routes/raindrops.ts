@@ -773,8 +773,8 @@ async function getRecentSearches(
     .limit(20)
 
   const items = (data ?? []).map((r) => ({
-    query: r.query,
-    created: r.created_at,
+    _id: r.query,
+    date: r.created_at,
   }))
 
   return jsonResponse({ result: true, items }, req)
