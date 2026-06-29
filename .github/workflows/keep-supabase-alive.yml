@@ -28,12 +28,21 @@ jobs:
           BASE="${SUPABASE_URL%/}"
 
           echo "Pinging REST API (profiles)..."
-          curl -sf \
+          HTTP=$(curl -s -o /tmp/supabase-response.txt -w "%{http_code}" \
             "${BASE}/rest/v1/profiles?select=id&limit=1" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}"
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}")
 
-          echo "Pinging Auth health..."
-          curl -sf "${BASE}/auth/v1/health"
+          echo "HTTP status: ${HTTP}"
+          cat /tmp/supabase-response.txt || true
 
-          echo "Supabase keep-alive ping successful."
+          if [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ]; then
+            echo "Supabase keep-alive ping successful."
+            exit 0
+          fi
+
+          if [ "$HTTP" = "401" ] || [ "$HTTP" = "403" ]; then
+            echo "Auth failed — check SUPABASE_SERVICE_ROLE_KEY in GitHub Secrets."
+          fi
+
+          exit 1
