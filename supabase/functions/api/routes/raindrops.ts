@@ -1,5 +1,7 @@
 import { createServiceClient, getUser } from '../../_shared/supabase.ts'
 import { jsonResponse, errorResponse, unauthorizedResponse } from '../../_shared/response.ts'
+import { getEnv } from '../../_shared/env.ts'
+import { writeMoveJournal, resolveCollectionName } from './moveJournal.ts'
 
 export async function handleRaindropRoutes(req: Request, path: string): Promise<Response> {
   const user = await getUser(req)
@@ -27,13 +29,13 @@ export async function handleRaindropRoutes(req: Request, path: string): Promise<
 
   // PUT raindrop/file
   if (path === 'raindrop/file' && req.method === 'PUT') {
-    return errorResponse(req, 501, 'not_implemented', 'File upload not yet available')
+    return await uploadRaindropFile(req, service, userId, user.id)
   }
 
   // PUT raindrop/{id}/cover
   const coverMatch = path.match(/^raindrop\/(\d+)\/cover$/)
   if (coverMatch && req.method === 'PUT') {
-    return errorResponse(req, 501, 'not_implemented', 'Cover upload not yet available')
+    return await uploadRaindropCover(req, service, userId, user.id, parseInt(coverMatch[1]))
   }
 
   // GET raindrop/{id}/cache
@@ -56,9 +58,20 @@ export async function handleRaindropRoutes(req: Request, path: string): Promise<
     return await createRaindrop(req, service, userId)
   }
 
+  // GET/DEL raindrops/recent/search
+  if (path === 'raindrops/recent/search') {
+    if (req.method === 'GET') return await getRecentSearches(req, service, userId)
+    if (req.method === 'DELETE') return await clearRecentSearches(req, service, userId)
+  }
+
   // POST raindrops (batch create)
   if (path === 'raindrops' && req.method === 'POST') {
     return await batchCreateRaindrops(req, service, userId)
+  }
+
+  // GET raindrops/links (duplicate check)
+  if (path === 'raindrops/links' && req.method === 'GET') {
+    return await checkDuplicateLinks(req, service, userId)
   }
 
   // GET/PUT/DEL raindrops/{collectionId}
@@ -90,6 +103,7 @@ function formatRaindrop(row: Record<string, unknown>) {
     important: row.important ?? false,
     order: row.order ?? 0,
     removed: row.removed ?? false,
+    broken: row.broken ?? false,
     highlights: row.highlights ?? [],
     reminder: row.reminder ?? null,
     file: row.file ?? null,
@@ -98,7 +112,7 @@ function formatRaindrop(row: Record<string, unknown>) {
     user: { '$id': row.user_id },
     created: row.created,
     lastUpdate: row.last_update,
-    pleaseParse: row.pleaseParse ?? null,
+    pleaseParse: row.pleaseparse ?? null,
   }
 }
 
@@ -128,6 +142,7 @@ async function createRaindrop(
   userId: number
 ): Promise<Response> {
   const body = await req.json()
+  const normalizedCover = normalizeCoverUrl(body.cover, req)
 
   const insert: Record<string, unknown> = {
     user_id: userId,
@@ -136,7 +151,7 @@ async function createRaindrop(
     excerpt: body.excerpt ?? '',
     note: body.note ?? '',
     type: body.type ?? detectType(body.link ?? ''),
-    cover: body.cover ?? '',
+    cover: normalizedCover ?? '',
     collection_id: body.collectionId ?? body['collection.$id'] ?? -1,
     important: body.important ?? false,
     order: body.order ?? 0,
@@ -146,7 +161,7 @@ async function createRaindrop(
   if (body.media) insert.media = body.media
   if (body.highlights) insert.highlights = body.highlights
   if (body.reminder) insert.reminder = body.reminder
-  if (body.pleaseParse) insert.pleaseParse = body.pleaseParse
+  if (body.pleaseParse) insert.pleaseparse = body.pleaseParse
 
   const { data, error } = await service
     .from('raindrops')
@@ -155,6 +170,19 @@ async function createRaindrop(
     .single()
 
   if (error) return errorResponse(req, 400, 'create_failed', error.message)
+
+  const colId = data.collection_id ?? -1
+  const colName = await resolveCollectionName(service, userId, colId)
+  writeMoveJournal(service, userId, {
+    action: 'create',
+    object_type: 'bookmark',
+    object_id: data._id,
+    object_title: data.title ?? '',
+    from_collection_id: null,
+    from_collection_name: '',
+    to_collection_id: colId,
+    to_collection_name: colName,
+  })
 
   return jsonResponse({ result: true, item: formatRaindrop(data) }, req)
 }
@@ -173,16 +201,15 @@ async function updateRaindrop(
   if (body.note !== undefined) updates.note = body.note
   if (body.link !== undefined) updates.link = body.link
   if (body.type !== undefined) updates.type = body.type
-  if (body.cover !== undefined) updates.cover = body.cover
+  if (body.cover !== undefined) updates.cover = normalizeCoverUrl(body.cover, req)
   if (body.media !== undefined) updates.media = body.media
   if (body.tags !== undefined) updates.tags = body.tags
   if (body.important !== undefined) updates.important = body.important
   if (body.order !== undefined) updates.order = body.order
   if (body.removed !== undefined) updates.removed = body.removed
-  if (body.highlights !== undefined) updates.highlights = body.highlights
   if (body.reminder !== undefined) updates.reminder = body.reminder
   if (body.file !== undefined) updates.file = body.file
-  if (body.pleaseParse !== undefined) updates.pleaseParse = body.pleaseParse
+  if (body.pleaseParse !== undefined) updates.pleaseparse = body.pleaseParse
 
   if (body.collectionId !== undefined) {
     updates.collection_id = body.collectionId
@@ -192,8 +219,58 @@ async function updateRaindrop(
     updates.collection_id = body['collection.$id']
   }
 
+  // Highlights merge logic: add/update/remove based on _id and text fields
+  if (body.highlights !== undefined) {
+    const incoming = body.highlights as Record<string, unknown>[]
+    const { data: existing } = await service
+      .from('raindrops')
+      .select('highlights')
+      .eq('_id', id)
+      .eq('user_id', userId)
+      .single()
+
+    let current = ((existing?.highlights ?? []) as Record<string, unknown>[])
+
+    for (const h of incoming) {
+      if (h._id) {
+        if (h.text === '') {
+          // Remove
+          current = current.filter((c) => c._id !== h._id)
+        } else {
+          // Update
+          current = current.map((c) =>
+            c._id === h._id ? { ...c, ...h, lastUpdate: new Date().toISOString() } : c
+          )
+        }
+      } else {
+        // Add
+        current.push({
+          ...h,
+          _id: crypto.randomUUID(),
+          created: new Date().toISOString(),
+          lastUpdate: new Date().toISOString(),
+        })
+      }
+    }
+    updates.highlights = current
+  }
+
   if (Object.keys(updates).length === 0) {
     return errorResponse(req, 400, 'no_changes', 'No fields to update')
+  }
+
+  let oldCollectionId: number | null = null
+  let oldTitle = ''
+  const collectionChanged = updates.collection_id !== undefined
+  if (collectionChanged) {
+    const { data: before } = await service
+      .from('raindrops')
+      .select('collection_id, title')
+      .eq('_id', id)
+      .eq('user_id', userId)
+      .single()
+    oldCollectionId = before?.collection_id ?? null
+    oldTitle = before?.title ?? ''
   }
 
   const { data, error } = await service
@@ -207,6 +284,29 @@ async function updateRaindrop(
   if (error) return errorResponse(req, 400, 'update_failed', error.message)
   if (!data) return errorResponse(req, 404, 'not_found', 'Raindrop not found')
 
+  if (collectionChanged && oldCollectionId !== null && oldCollectionId !== data.collection_id) {
+    const newColId = data.collection_id as number
+    let action = 'move'
+    if (newColId === -99) action = 'trash'
+    else if (oldCollectionId === -99) action = 'restore'
+
+    const [fromName, toName] = await Promise.all([
+      resolveCollectionName(service, userId, oldCollectionId),
+      resolveCollectionName(service, userId, newColId),
+    ])
+
+    writeMoveJournal(service, userId, {
+      action,
+      object_type: 'bookmark',
+      object_id: data._id,
+      object_title: data.title ?? oldTitle,
+      from_collection_id: oldCollectionId,
+      from_collection_name: fromName,
+      to_collection_id: newColId,
+      to_collection_name: toName,
+    })
+  }
+
   return jsonResponse({ result: true, item: formatRaindrop(data) }, req)
 }
 
@@ -218,23 +318,40 @@ async function deleteRaindrop(
 ): Promise<Response> {
   const { data: existing } = await service
     .from('raindrops')
-    .select('collection_id')
+    .select('collection_id, broken, title, link')
     .eq('_id', id)
     .eq('user_id', userId)
     .single()
 
   if (!existing) return errorResponse(req, 404, 'not_found', 'Raindrop not found')
 
+  // Journal entry for broken bookmarks (only on first delete, not from trash)
+  if (existing.broken && existing.collection_id !== -99) {
+    await writeBrokenJournal(service, userId, existing.title, existing.link, existing.collection_id)
+  }
+
   // Already in trash -> permanent delete
   if (existing.collection_id === -99) {
     await service.from('raindrops').delete().eq('_id', id).eq('user_id', userId)
   } else {
+    const fromName = await resolveCollectionName(service, userId, existing.collection_id)
     // Move to trash
     await service
       .from('raindrops')
       .update({ collection_id: -99, removed: true })
       .eq('_id', id)
       .eq('user_id', userId)
+
+    writeMoveJournal(service, userId, {
+      action: 'trash',
+      object_type: 'bookmark',
+      object_id: id,
+      object_title: existing.title ?? '',
+      from_collection_id: existing.collection_id,
+      from_collection_name: fromName,
+      to_collection_id: -99,
+      to_collection_name: 'Trash',
+    })
   }
 
   return jsonResponse({ result: true }, req)
@@ -275,6 +392,11 @@ async function listRaindrops(
     query = query.eq('collection_id', collectionId)
   }
 
+  // Save search to recent (fire and forget)
+  if (search) {
+    service.from('recent_searches').insert({ user_id: userId, query: search }).then(() => {})
+  }
+
   // Search
   if (search) {
     if (search.startsWith('#')) {
@@ -285,6 +407,8 @@ async function listRaindrops(
       query = query.eq('domain', search.slice(7))
     } else if (search.startsWith('important:')) {
       query = query.eq('important', search.slice(10) === 'true')
+    } else if (search.startsWith('broken:')) {
+      query = query.eq('broken', search.slice(7).trim() === 'true')
     } else {
       query = query.textSearch('search_vector', search.split(/\s+/).join(' & '), { type: 'plain' })
     }
@@ -324,10 +448,16 @@ async function batchCreateRaindrops(
   userId: number
 ): Promise<Response> {
   const body = await req.json()
-  const items: Record<string, unknown>[] = body.items ?? []
+  console.log('POST /raindrops body:', JSON.stringify(body))
+  let items: Record<string, unknown>[] = body.items ?? []
+
+  // Fallback: einzelnes Item ohne items-Wrapper
+  if (!items.length && body.link) {
+    items = [body]
+  }
 
   if (!items.length) {
-    return errorResponse(req, 400, 'missing_items', 'No items provided')
+    return errorResponse(req, 400, 'missing_items', `No items. Keys: ${Object.keys(body).join(',')}`)
   }
 
   const inserts = items.slice(0, 100).map((item) => ({
@@ -337,13 +467,13 @@ async function batchCreateRaindrops(
     excerpt: item.excerpt ?? '',
     note: item.note ?? '',
     type: item.type ?? detectType((item.link as string) ?? ''),
-    cover: item.cover ?? '',
+    cover: normalizeCoverUrl(item.cover, req) ?? '',
     collection_id: item.collectionId ?? item['collection.$id'] ?? -1,
     important: item.important ?? false,
     order: item.order ?? 0,
     tags: item.tags ?? [],
     media: item.media ?? [],
-    pleaseParse: item.pleaseParse ?? null,
+    pleaseparse: item.pleaseParse ?? null,
   }))
 
   const { data, error } = await service
@@ -374,13 +504,27 @@ async function batchUpdateRaindrops(
   if (body.important !== undefined) updates.important = body.important
   if (body.tags !== undefined) updates.tags = body.tags
   if (body.media !== undefined) updates.media = body.media
-  if (body.cover !== undefined) updates.cover = body.cover
+  if (body.cover !== undefined) updates.cover = normalizeCoverUrl(body.cover, req)
   if (body.collectionId !== undefined) {
     updates.collection_id = body.collectionId
     if (body.collectionId === -1) updates.removed = false
   }
   if (body.excerpt !== undefined) updates.excerpt = body.excerpt
-  if (body.pleaseParse !== undefined) updates.pleaseParse = body.pleaseParse
+  if (body.pleaseParse !== undefined) updates.pleaseparse = body.pleaseParse
+
+  const collectionChanged = updates.collection_id !== undefined
+  let affectedBookmarks: Array<{ _id: number; title: string; collection_id: number }> = []
+
+  if (collectionChanged) {
+    let fetchQ = service
+      .from('raindrops')
+      .select('_id, title, collection_id')
+      .eq('user_id', userId)
+    if (ids?.length) fetchQ = fetchQ.in('_id', ids)
+    else if (collectionId !== 0) fetchQ = fetchQ.eq('collection_id', collectionId)
+    const { data: before } = await fetchQ.limit(500)
+    affectedBookmarks = before ?? []
+  }
 
   let query = service
     .from('raindrops')
@@ -397,6 +541,32 @@ async function batchUpdateRaindrops(
 
   if (error) return errorResponse(req, 400, 'update_failed', error.message)
 
+  if (collectionChanged && affectedBookmarks.length > 0) {
+    const newColId = updates.collection_id as number
+    const batchId = crypto.randomUUID()
+    const toName = await resolveCollectionName(service, userId, newColId)
+
+    for (const bm of affectedBookmarks) {
+      if (bm.collection_id === newColId) continue
+      let action = 'move'
+      if (newColId === -99) action = 'trash'
+      else if (bm.collection_id === -99) action = 'restore'
+
+      const fromName = await resolveCollectionName(service, userId, bm.collection_id)
+      writeMoveJournal(service, userId, {
+        action,
+        object_type: 'bookmark',
+        object_id: bm._id,
+        object_title: bm.title ?? '',
+        from_collection_id: bm.collection_id,
+        from_collection_name: fromName,
+        to_collection_id: newColId,
+        to_collection_name: toName,
+        batch_id: batchId,
+      })
+    }
+  }
+
   return jsonResponse({ result: true }, req)
 }
 
@@ -411,14 +581,25 @@ async function batchDeleteRaindrops(
   const body = await req.json().catch(() => ({}))
   const ids: number[] | undefined = body.ids
 
+  // Journal entries for broken bookmarks (only on first delete, not from trash)
+  if (collectionId !== -99) {
+    await writeBrokenJournalBatch(service, userId, collectionId, ids)
+  }
+
   if (collectionId === -99) {
-    // Permanent delete from trash
     let query = service.from('raindrops').delete().eq('user_id', userId).eq('collection_id', -99)
     if (ids?.length) query = query.in('_id', ids)
     const { error } = await query
     if (error) return errorResponse(req, 400, 'delete_failed', error.message)
   } else {
-    // Move to trash
+    let fetchQ = service
+      .from('raindrops')
+      .select('_id, title, collection_id')
+      .eq('user_id', userId)
+    if (ids?.length) fetchQ = fetchQ.in('_id', ids)
+    else if (collectionId !== 0) fetchQ = fetchQ.eq('collection_id', collectionId)
+    const { data: affected } = await fetchQ.limit(500)
+
     let query = service
       .from('raindrops')
       .update({ collection_id: -99, removed: true })
@@ -432,6 +613,24 @@ async function batchDeleteRaindrops(
 
     const { error } = await query
     if (error) return errorResponse(req, 400, 'delete_failed', error.message)
+
+    if (affected?.length) {
+      const batchId = crypto.randomUUID()
+      for (const bm of affected) {
+        const fromName = await resolveCollectionName(service, userId, bm.collection_id)
+        writeMoveJournal(service, userId, {
+          action: 'trash',
+          object_type: 'bookmark',
+          object_id: bm._id,
+          object_title: bm.title ?? '',
+          from_collection_id: bm.collection_id,
+          from_collection_name: fromName,
+          to_collection_id: -99,
+          to_collection_name: 'Trash',
+          batch_id: batchId,
+        })
+      }
+    }
   }
 
   return jsonResponse({ result: true }, req)
@@ -543,6 +742,213 @@ function extractTagContent(html: string, tag: string): string | null {
   return match ? match[1].trim() : null
 }
 
+function normalizeCoverUrl(rawCover: unknown, req: Request): string {
+  if (typeof rawCover !== 'string' || !rawCover.trim()) return ''
+
+  const cover = rawCover.trim()
+
+  try {
+    const parsed = new URL(cover)
+    const isLegacyHost = parsed.hostname === 'html2pdf-theta.vercel.app'
+    const isCurrentHost = parsed.hostname === 'toolbox-six-tau.vercel.app'
+    const isThumbnailPath = parsed.pathname === '/api/v1/thumbnail'
+    const sourceUrl = parsed.searchParams.get('url')
+
+    if (!(isThumbnailPath && sourceUrl && (isLegacyHost || isCurrentHost))) {
+      return cover
+    }
+
+    const reqUrl = new URL(req.url)
+    const apiBase = `${reqUrl.origin}/functions/v1/api/thumbnail/render/${encodeURIComponent(sourceUrl)}`
+    const passthrough = new URLSearchParams()
+    const keys = ['mode', 'fill', 'format', 'width', 'height', 'ar', 'dpr', 'quality']
+    for (const key of keys) {
+      const value = parsed.searchParams.get(key)
+      if (value) passthrough.set(key, value)
+    }
+
+    return passthrough.toString() ? `${apiBase}?${passthrough.toString()}` : apiBase
+  } catch {
+    return cover
+  }
+}
+
+// ─── File Upload ─────────────────────────────────────────
+
+const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
+const MAX_COVER_SIZE = 10 * 1024 * 1024 // 10MB
+const ALLOWED_COVER_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml', 'image/x-icon', 'image/bmp', 'image/tiff']
+
+async function uploadRaindropFile(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  authUid: string
+): Promise<Response> {
+  const formData = await req.formData().catch(() => null)
+  if (!formData) return errorResponse(req, 400, '-1', 'no file')
+
+  const file = formData.get('file') as File | null
+  if (!file) return errorResponse(req, 400, '-1', 'no file')
+
+  if (file.size > MAX_FILE_SIZE) {
+    return errorResponse(req, 400, 'file_size_limit', 'File size limit')
+  }
+
+  const collectionId = parseInt(formData.get('collectionId') as string) || -1
+  const ext = file.name.split('.').pop() ?? ''
+  const storagePath = `${authUid}/${crypto.randomUUID()}.${ext}`
+
+  const { error: uploadError } = await service.storage
+    .from('raindrop-files')
+    .upload(storagePath, file, { contentType: file.type, upsert: false })
+
+  if (uploadError) {
+    return errorResponse(req, 400, 'file_invalid', uploadError.message)
+  }
+
+  const supabaseUrl = getEnv('SUPABASE_URL')!
+  const fileUrl = `${supabaseUrl}/storage/v1/object/raindrop-files/${storagePath}`
+  const fileType = detectType(file.name)
+
+  const { data: raindrop, error: createError } = await service
+    .from('raindrops')
+    .insert({
+      user_id: userId,
+      link: fileUrl,
+      title: file.name.replace(/\.[^.]+$/, ''),
+      type: fileType,
+      collection_id: collectionId,
+      domain: 'upload',
+      file: { name: file.name, size: file.size, type: file.type },
+    })
+    .select()
+    .single()
+
+  if (createError) {
+    return errorResponse(req, 400, 'create_failed', createError.message)
+  }
+
+  return jsonResponse({ result: true, item: formatRaindrop(raindrop) }, req)
+}
+
+async function uploadRaindropCover(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  authUid: string,
+  raindropId: number
+): Promise<Response> {
+  const formData = await req.formData().catch(() => null)
+  if (!formData) return errorResponse(req, 400, '-1', 'no file')
+
+  const file = formData.get('cover') as File | null
+  if (!file) return errorResponse(req, 400, '-1', 'no file')
+
+  if (!ALLOWED_COVER_TYPES.includes(file.type)) {
+    return errorResponse(req, 400, 'file_invalid', 'File is invalid')
+  }
+
+  if (file.size > MAX_COVER_SIZE) {
+    return errorResponse(req, 400, 'file_size_limit', 'File size limit')
+  }
+
+  const ext = file.name.split('.').pop() ?? 'jpg'
+  const storagePath = `${authUid}/${raindropId}.${ext}`
+
+  const { error: uploadError } = await service.storage
+    .from('raindrop-covers')
+    .upload(storagePath, file, { contentType: file.type, upsert: true })
+
+  if (uploadError) {
+    return errorResponse(req, 400, 'file_invalid', uploadError.message)
+  }
+
+  const supabaseUrl = getEnv('SUPABASE_URL')!
+  const coverUrl = `${supabaseUrl}/storage/v1/object/public/raindrop-covers/${storagePath}`
+
+  const { data, error } = await service
+    .from('raindrops')
+    .update({
+      cover: coverUrl,
+      media: [{ link: coverUrl }],
+    })
+    .eq('_id', raindropId)
+    .eq('user_id', userId)
+    .select()
+    .single()
+
+  if (error || !data) {
+    return errorResponse(req, 400, 'update_failed', error?.message ?? 'Raindrop not found')
+  }
+
+  return jsonResponse({ result: true, item: formatRaindrop(data) }, req)
+}
+
+// ─── Recent Searches ─────────────────────────────────────
+
+async function getRecentSearches(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number
+): Promise<Response> {
+  const { data } = await service
+    .from('recent_searches')
+    .select('query, created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  const items = (data ?? []).map((r) => ({
+    _id: r.query,
+    date: r.created_at,
+  }))
+
+  return jsonResponse({ result: true, items }, req)
+}
+
+async function clearRecentSearches(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number
+): Promise<Response> {
+  const { count } = await service
+    .from('recent_searches')
+    .delete()
+    .eq('user_id', userId)
+
+  return jsonResponse({ result: true, modified: count ?? 0 }, req)
+}
+
+// ─── Helpers ─────────────────────────────────────────────
+
+async function checkDuplicateLinks(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number
+): Promise<Response> {
+  const url = new URL(req.url)
+  const links = url.searchParams.getAll('url')
+
+  if (!links.length) {
+    return jsonResponse({ result: true, items: [], count: 0 }, req)
+  }
+
+  const { data, error } = await service
+    .from('raindrops')
+    .select('*')
+    .eq('user_id', userId)
+    .in('link', links)
+
+  if (error) return errorResponse(req, 500, 'db_error', error.message)
+
+  return jsonResponse({
+    result: true,
+    items: (data ?? []).map(formatRaindrop),
+    count: (data ?? []).length,
+  }, req)
+}
+
 async function getCollectionDescendantIds(
   service: ReturnType<typeof createServiceClient>,
   userId: number,
@@ -561,4 +967,77 @@ async function getCollectionDescendantIds(
     ids.map((id) => getCollectionDescendantIds(service, userId, id))
   )
   return [...ids, ...nested.flat()]
+}
+
+// ─── Broken Journal Helpers ─────────────────────────────
+
+async function writeBrokenJournal(
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  title: string,
+  url: string,
+  collectionId: number
+) {
+  let collectionName = ''
+  if (collectionId > 0) {
+    const { data: col } = await service
+      .from('collections')
+      .select('title')
+      .eq('_id', collectionId)
+      .single()
+    collectionName = col?.title ?? ''
+  }
+
+  await service.from('link_check_journal').insert({
+    user_id: userId,
+    bookmark_title: title ?? '',
+    url: url ?? '',
+    collection_name: collectionName,
+  })
+}
+
+async function writeBrokenJournalBatch(
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  collectionId: number,
+  ids?: number[]
+) {
+  let query = service
+    .from('raindrops')
+    .select('title, link, collection_id')
+    .eq('user_id', userId)
+    .eq('broken', true)
+
+  if (ids?.length) {
+    query = query.in('_id', ids)
+  } else if (collectionId !== 0) {
+    query = query.eq('collection_id', collectionId)
+  }
+
+  const { data: brokenItems } = await query
+
+  if (!brokenItems?.length) return
+
+  const collectionIds = [...new Set(brokenItems.map((b) => b.collection_id).filter((id) => id > 0))]
+  const collectionNames: Record<number, string> = {}
+
+  if (collectionIds.length) {
+    const { data: cols } = await service
+      .from('collections')
+      .select('_id, title')
+      .in('_id', collectionIds)
+
+    for (const col of cols ?? []) {
+      collectionNames[col._id] = col.title
+    }
+  }
+
+  const inserts = brokenItems.map((b) => ({
+    user_id: userId,
+    bookmark_title: b.title ?? '',
+    url: b.link ?? '',
+    collection_name: collectionNames[b.collection_id] ?? '',
+  }))
+
+  await service.from('link_check_journal').insert(inserts)
 }

@@ -5,6 +5,8 @@ export async function handleUserRoutes(req: Request, path: string): Promise<Resp
   switch (path) {
     case 'user':
       return await handleUser(req)
+    case 'user/avatar':
+      return await handleAvatar(req)
     case 'user/stats':
       return await handleUserStats(req)
     case 'user/subscription':
@@ -111,11 +113,60 @@ async function handleUserStats(req: Request): Promise<Response> {
     result: true,
     items,
     meta: {
-      pro: false,
+      pro: true,
       _id: profile.integer_id,
       changedBookmarksDate: new Date().toISOString(),
     },
   }, req)
+}
+
+async function handleAvatar(req: Request): Promise<Response> {
+  if (req.method !== 'PUT') {
+    return errorResponse(req, 405, 'method_not_allowed')
+  }
+
+  const user = await getUser(req)
+  if (!user) return unauthorizedResponse(req)
+
+  const formData = await req.formData().catch(() => null)
+  if (!formData) return errorResponse(req, 400, '-1', 'no file')
+
+  const file = formData.get('avatar') as File | null
+  if (!file) return errorResponse(req, 400, '-1', 'no file')
+
+  const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+  const ext = (file.name?.split('.').pop() ?? 'jpg').toLowerCase()
+  if (file.type && !allowedTypes.includes(file.type)) {
+    return errorResponse(req, 400, 'file_invalid', `File type '${file.type}' not allowed`)
+  }
+
+  if (file.size > 5 * 1024 * 1024) {
+    return errorResponse(req, 400, 'file_size_limit', 'Max 5MB')
+  }
+
+  const service = createServiceClient()
+  const storagePath = `${user.id}/avatar.${ext}`
+
+  const { error: uploadError } = await service.storage
+    .from('raindrop-covers')
+    .upload(storagePath, file, { contentType: file.type, upsert: true })
+
+  if (uploadError) {
+    return errorResponse(req, 400, 'upload_failed', uploadError.message)
+  }
+
+  const { data: publicUrlData } = service.storage
+    .from('raindrop-covers')
+    .getPublicUrl(storagePath)
+  const avatarUrl = publicUrlData.publicUrl
+
+  await service
+    .from('profiles')
+    .update({ avatar: avatarUrl })
+    .eq('id', user.id)
+
+  const updatedProfile = await getProfile(req)
+  return jsonResponse({ result: true, user: updatedProfile }, req)
 }
 
 async function handleSubscription(req: Request): Promise<Response> {

@@ -1,5 +1,7 @@
 import { createServiceClient, getUser } from '../../_shared/supabase.ts'
 import { jsonResponse, errorResponse, unauthorizedResponse } from '../../_shared/response.ts'
+import { getEnv } from '../../_shared/env.ts'
+import { writeMoveJournal, resolveCollectionName } from './moveJournal.ts'
 
 export async function handleCollectionRoutes(req: Request, path: string): Promise<Response> {
   const user = await getUser(req)
@@ -31,7 +33,7 @@ export async function handleCollectionRoutes(req: Request, path: string): Promis
   }
 
   // GET collections/covers/{query}
-  if (path.startsWith('collections/covers/')) {
+  if (path.startsWith('collections/covers')) {
     return jsonResponse({ result: true, items: [] }, req)
   }
 
@@ -47,10 +49,33 @@ export async function handleCollectionRoutes(req: Request, path: string): Promis
     return await getLastAction(req, service, userId, parseInt(lastActionMatch[1]))
   }
 
-  // collection/{id}/sharing (stub)
-  const sharingMatch = path.match(/^collection\/(-?\d+)\/sharing/)
+  // collection/{id}/sharing/{userId}
+  const sharingUserMatch = path.match(/^collection\/(\d+)\/sharing\/(\d+)$/)
+  if (sharingUserMatch) {
+    const cId = parseInt(sharingUserMatch[1])
+    const targetUserId = parseInt(sharingUserMatch[2])
+    if (req.method === 'PUT') return await updateSharingUser(req, service, userId, cId, targetUserId)
+    if (req.method === 'DELETE') return await removeSharingUser(req, service, userId, cId, targetUserId)
+  }
+
+  // collection/{id}/sharing
+  const sharingMatch = path.match(/^collection\/(\d+)\/sharing$/)
   if (sharingMatch) {
-    return jsonResponse({ result: true, items: [] }, req)
+    const cId = parseInt(sharingMatch[1])
+    if (req.method === 'GET') return await getSharingList(req, service, userId, cId)
+    if (req.method === 'POST') return await createSharingInvite(req, service, userId, cId)
+    if (req.method === 'DELETE') return await unshareCollection(req, service, userId, cId)
+  }
+
+  // collaborators/join?token=
+  if (path === 'collaborators/join' && req.method === 'GET') {
+    return await joinByToken(req, service, userId)
+  }
+
+  // PUT collection/{id}/cover
+  const coverMatch = path.match(/^collection\/(-?\d+)\/cover$/)
+  if (coverMatch && req.method === 'PUT') {
+    return await uploadCollectionCover(req, service, userId, user.id, parseInt(coverMatch[1]))
   }
 
   // collection/{id}
@@ -108,7 +133,17 @@ async function getAllCollections(
 
   const items = (data ?? []).map((row) => formatCollection(row, userId))
 
-  return jsonResponse({ result: true, items }, req)
+  const totalCount = items.reduce((sum, c) => sum + (c.count ?? 0), 0)
+  const unsortedCount = await getSystemCollectionCount(service, userId, -1)
+  const trashCount = await getSystemCollectionCount(service, userId, -99)
+
+  const systemCollections = [
+    { _id: 0, title: 'All', count: totalCount, access: { level: 4, draggable: false }, author: true, view: 'list', public: false, expanded: false, sort: 0, color: '', cover: [] },
+    { _id: -1, title: 'Unsorted', count: unsortedCount, access: { level: 4, draggable: false }, author: true, view: 'list', public: false, expanded: false, sort: 0, color: '', cover: [] },
+    { _id: -99, title: 'Trash', count: trashCount, access: { level: 4, draggable: false }, author: true, view: 'list', public: false, expanded: false, sort: 0, color: '', cover: [] },
+  ]
+
+  return jsonResponse({ result: true, items: [...systemCollections, ...items] }, req)
 }
 
 async function getCollection(
@@ -159,6 +194,21 @@ async function createCollection(
 
   if (error) return errorResponse(req, 400, 'create_failed', error.message)
 
+  const parentId = (data.parent_id as number | null) ?? null
+  const parentName = parentId
+    ? await resolveCollectionName(service, userId, parentId)
+    : 'Root'
+  writeMoveJournal(service, userId, {
+    action: 'create',
+    object_type: 'collection',
+    object_id: data._id,
+    object_title: data.title ?? '',
+    from_collection_id: null,
+    from_collection_name: '',
+    to_collection_id: parentId,
+    to_collection_name: parentName,
+  })
+
   return jsonResponse({ result: true, item: formatCollection(data, userId) }, req)
 }
 
@@ -202,6 +252,20 @@ async function updateCollection(
     }
   }
 
+  const parentChanged = updates.parent_id !== undefined
+  let oldParentId: number | null = null
+  let collectionTitle = ''
+  if (parentChanged) {
+    const { data: before } = await service
+      .from('collections')
+      .select('parent_id, title')
+      .eq('_id', id)
+      .eq('user_id', userId)
+      .single()
+    oldParentId = before?.parent_id ?? null
+    collectionTitle = before?.title ?? ''
+  }
+
   const { data, error } = await service
     .from('collections')
     .update(updates)
@@ -212,6 +276,26 @@ async function updateCollection(
 
   if (error) return errorResponse(req, 400, 'update_failed', error.message)
   if (!data) return errorResponse(req, 404, 'not_found', 'Collection not found')
+
+  if (parentChanged) {
+    const newParentId = (data.parent_id as number | null) ?? null
+    if (oldParentId !== newParentId) {
+      const [fromName, toName] = await Promise.all([
+        resolveCollectionName(service, userId, oldParentId),
+        resolveCollectionName(service, userId, newParentId),
+      ])
+      writeMoveJournal(service, userId, {
+        action: 'move',
+        object_type: 'collection',
+        object_id: id,
+        object_title: data.title ?? collectionTitle,
+        from_collection_id: oldParentId,
+        from_collection_name: fromName || 'Root',
+        to_collection_id: newParentId,
+        to_collection_name: toName || 'Root',
+      })
+    }
+  }
 
   return jsonResponse({ result: true, item: formatCollection(data, userId) }, req)
 }
@@ -232,7 +316,13 @@ async function deleteCollection(
     return jsonResponse({ result: true }, req)
   }
 
-  // Raindrops dieser Collection (und Kinder) nach Trash verschieben
+  const { data: colData } = await service
+    .from('collections')
+    .select('title, parent_id')
+    .eq('_id', id)
+    .eq('user_id', userId)
+    .single()
+
   const childIds = await getDescendantIds(service, userId, id)
   const allIds = [id, ...childIds]
 
@@ -242,7 +332,6 @@ async function deleteCollection(
     .in('collection_id', allIds)
     .eq('user_id', userId)
 
-  // Collection und Kinder loeschen (CASCADE)
   const { error } = await service
     .from('collections')
     .delete()
@@ -250,6 +339,22 @@ async function deleteCollection(
     .eq('user_id', userId)
 
   if (error) return errorResponse(req, 400, 'delete_failed', error.message)
+
+  if (colData) {
+    const fromName = colData.parent_id
+      ? await resolveCollectionName(service, userId, colData.parent_id)
+      : 'Root'
+    writeMoveJournal(service, userId, {
+      action: 'trash',
+      object_type: 'collection',
+      object_id: id,
+      object_title: colData.title ?? '',
+      from_collection_id: colData.parent_id ?? null,
+      from_collection_name: fromName,
+      to_collection_id: -99,
+      to_collection_name: 'Trash',
+    })
+  }
 
   return jsonResponse({ result: true }, req)
 }
@@ -424,6 +529,219 @@ async function getLastAction(
   }, req)
 }
 
+async function uploadCollectionCover(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  authUid: string,
+  collectionId: number
+): Promise<Response> {
+  const formData = await req.formData().catch(() => null)
+  if (!formData) return errorResponse(req, 400, '-1', 'no file')
+
+  const file = formData.get('cover') as File | null
+  if (!file) return errorResponse(req, 400, '-1', 'no file')
+
+  const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml', 'image/x-icon', 'image/bmp', 'image/tiff']
+  const ext = (file.name?.split('.').pop() ?? '').toLowerCase()
+  const allowedExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'tiff']
+  if (file.type && !allowedTypes.includes(file.type) && !allowedExts.includes(ext)) {
+    return errorResponse(req, 400, 'file_invalid', `File type '${file.type}' (ext: ${ext}) not allowed`)
+  }
+
+  if (file.size > 10 * 1024 * 1024) {
+    return errorResponse(req, 400, 'file_size_limit', 'File size limit')
+  }
+
+  const fileExt = ext || 'jpg'
+  const storagePath = `${authUid}/collection-${collectionId}.${fileExt}`
+
+  const { error: uploadError } = await service.storage
+    .from('raindrop-covers')
+    .upload(storagePath, file, { contentType: file.type, upsert: true })
+
+  if (uploadError) {
+    return errorResponse(req, 400, 'file_invalid', uploadError.message)
+  }
+
+  const supabaseUrl = getEnv('SUPABASE_URL')!
+  const coverUrl = `${supabaseUrl}/storage/v1/object/public/raindrop-covers/${storagePath}`
+
+  const { data, error } = await service
+    .from('collections')
+    .update({ cover: [coverUrl] })
+    .eq('_id', collectionId)
+    .eq('user_id', userId)
+    .select()
+    .single()
+
+  if (error || !data) {
+    return errorResponse(req, 400, 'update_failed', error?.message ?? 'Collection not found')
+  }
+
+  return jsonResponse({ result: true, item: formatCollection(data, userId) }, req)
+}
+
+// ─── Sharing ─────────────────────────────────────────────
+
+async function verifyCollectionOwner(
+  service: ReturnType<typeof createServiceClient>,
+  collectionId: number,
+  userId: number
+): Promise<boolean> {
+  const { data } = await service
+    .from('collections')
+    .select('_id')
+    .eq('_id', collectionId)
+    .eq('user_id', userId)
+    .single()
+  return !!data
+}
+
+async function getSharingList(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  collectionId: number
+): Promise<Response> {
+  const { data } = await service
+    .from('collection_sharing')
+    .select('user_id, role, created_at')
+    .eq('collection_id', collectionId)
+    .not('user_id', 'is', null)
+
+  const items = (data ?? []).map((s) => ({
+    _id: s.user_id,
+    role: s.role,
+    joined: s.created_at,
+  }))
+
+  return jsonResponse({ result: true, items }, req)
+}
+
+async function createSharingInvite(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  collectionId: number
+): Promise<Response> {
+  if (!await verifyCollectionOwner(service, collectionId, userId)) {
+    return errorResponse(req, 403, 'forbidden', 'Only the collection owner can create invites')
+  }
+
+  const body = await req.json()
+  const role = body.role ?? 'viewer'
+  const token = crypto.randomUUID()
+
+  const { error } = await service
+    .from('collection_sharing')
+    .insert({ collection_id: collectionId, role, token })
+
+  if (error) return errorResponse(req, 400, 'invite_failed', error.message)
+
+  const siteUrl = getEnv('SITE_URL') ?? 'http://localhost:3000'
+  const link = `${siteUrl}/app/invite/${token}`
+
+  return jsonResponse({ result: true, link, token }, req)
+}
+
+async function updateSharingUser(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  collectionId: number,
+  targetUserId: number
+): Promise<Response> {
+  if (!await verifyCollectionOwner(service, collectionId, userId)) {
+    return errorResponse(req, 403, 'forbidden', 'Only the collection owner can update sharing')
+  }
+
+  const body = await req.json()
+  const updates: Record<string, unknown> = {}
+  if (body.role !== undefined) updates.role = body.role
+
+  const { error } = await service
+    .from('collection_sharing')
+    .update(updates)
+    .eq('collection_id', collectionId)
+    .eq('user_id', targetUserId)
+
+  if (error) return errorResponse(req, 400, 'update_failed', error.message)
+
+  return jsonResponse({ result: true }, req)
+}
+
+async function removeSharingUser(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  collectionId: number,
+  targetUserId: number
+): Promise<Response> {
+  if (!await verifyCollectionOwner(service, collectionId, userId)) {
+    return errorResponse(req, 403, 'forbidden', 'Only the collection owner can remove users')
+  }
+
+  const { error } = await service
+    .from('collection_sharing')
+    .delete()
+    .eq('collection_id', collectionId)
+    .eq('user_id', targetUserId)
+
+  if (error) return errorResponse(req, 400, 'remove_failed', error.message)
+
+  return jsonResponse({ result: true }, req)
+}
+
+async function unshareCollection(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  collectionId: number
+): Promise<Response> {
+  if (!await verifyCollectionOwner(service, collectionId, userId)) {
+    return errorResponse(req, 403, 'forbidden', 'Only the collection owner can unshare')
+  }
+
+  const { error } = await service
+    .from('collection_sharing')
+    .delete()
+    .eq('collection_id', collectionId)
+
+  if (error) return errorResponse(req, 400, 'unshare_failed', error.message)
+
+  return jsonResponse({ result: true }, req)
+}
+
+async function joinByToken(
+  req: Request,
+  service: ReturnType<typeof createServiceClient>,
+  userId: number
+): Promise<Response> {
+  const url = new URL(req.url)
+  const token = url.searchParams.get('token')
+  if (!token) return errorResponse(req, 400, 'missing_token', 'Token required')
+
+  const { data: invite } = await service
+    .from('collection_sharing')
+    .select('id, collection_id, role')
+    .eq('token', token)
+    .is('user_id', null)
+    .single()
+
+  if (!invite) return errorResponse(req, 400, 'invalid_token', 'Invite token is invalid or already used')
+
+  // Claim the invite
+  await service
+    .from('collection_sharing')
+    .update({ user_id: userId, token: null })
+    .eq('id', invite.id)
+
+  return jsonResponse({ result: true, cId: invite.collection_id }, req)
+}
+
+// ─── Helpers ─────────────────────────────────────────────
+
 async function getDescendantIds(
   service: ReturnType<typeof createServiceClient>,
   userId: number,
@@ -442,4 +760,18 @@ async function getDescendantIds(
     ids.map((id) => getDescendantIds(service, userId, id))
   )
   return [...ids, ...nested.flat()]
+}
+
+async function getSystemCollectionCount(
+  service: ReturnType<typeof createServiceClient>,
+  userId: number,
+  collectionId: number
+): Promise<number> {
+  const { count } = await service
+    .from('raindrops')
+    .select('_id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('collection_id', collectionId)
+
+  return count ?? 0
 }

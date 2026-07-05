@@ -1,8 +1,13 @@
 # RDBE-7: File Upload (Supabase Storage)
 
-## Status: Planned
+## Status: Backend Done
 **Created:** 2026-03-13  
 **Last Updated:** 2026-03-13
+
+### Backend-Dateien
+- `supabase/migrations/20260313000005_storage_buckets.sql` – Storage Buckets + RLS Policies
+- `supabase/functions/api/routes/raindrops.ts` – PUT raindrop/file + PUT raindrop/{id}/cover
+- `supabase/functions/api/routes/collections.ts` – PUT collection/{id}/cover
 
 ## Dependencies
 - RDBE-1
@@ -38,10 +43,51 @@
 <!-- Sections below are added by subsequent skills -->
 
 ## Tech Design (Solution Architect)
-_To be added by /architecture_
+
+### Storage-Architektur
+
+- **raindrop-files** Bucket (privat): Hochgeladene Dateien als Bookmarks. Zugriff nur fuer Owner.
+- **raindrop-covers** Bucket (public read): Cover-Bilder fuer Raindrops und Collections. Public lesbar.
+- Dateipfad-Schema: `{auth_uid}/{id_or_uuid}.{ext}`
+
+### Limits
+- Dateien: max 100MB
+- Covers: max 10MB, nur PNG/JPEG/GIF/WEBP
+- Storage-Policies pruefen `auth.uid()` im Ordnernamen
 
 ## QA Test Results
-_To be added by /qa_
+
+**Tested:** 2026-03-13  
+**Methode:** Code Review (kein laufender Server)  
+**Tester:** QA Engineer (AI)
+
+### Acceptance Criteria Status
+
+#### AC-1: Upload Endpoints
+- [x] PUT raindrop/file (Datei-Upload, erzeugt neuen Raindrop)
+- [x] PUT raindrop/{id}/cover (Cover-Upload, aktualisiert Raindrop)
+- [x] PUT collection/{id}/cover (Collection-Cover)
+
+#### AC-2: Storage mit Access Control
+- [x] raindrop-files Bucket (privat) mit Owner-RLS
+- [x] raindrop-covers Bucket (public read, Owner-write)
+- [x] Pfad-Schema: `{auth_uid}/{id}.{ext}`
+
+#### AC-3: Validierung
+- [x] Datei: Max 100MB
+- [x] Cover: Max 10MB, nur PNG/JPEG/GIF/WEBP
+- [x] Fehlende Datei: 400 Error
+
+#### AC-4: Error Shape
+- [x] Konsistentes `{error, errorMessage}` Format
+
+#### AC-5: File Lifecycle
+- [ ] **BUG-9:** Siehe RDBE-4 – Storage-Dateien werden bei permanentem Raindrop-Delete nicht entfernt
+
+### Summary
+- **Acceptance Criteria:** 4.5/5 bestanden (File Lifecycle unvollstaendig)
+- **Bugs Found:** 1 (BUG-9 in RDBE-4 dokumentiert, Medium)
+- **Production Ready:** BEDINGT (Orphan-Files als Tech-Debt akzeptabel)
 
 ## Deployment
 _To be added by /deploy_

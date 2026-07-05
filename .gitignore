@@ -1,0 +1,11 @@
+.env
+.env.local
+.env.*.local
+
+node_modules/
+supabase/.temp/
+
+.DS_Store
+*.log
+
+raindrop-api.code-workspace

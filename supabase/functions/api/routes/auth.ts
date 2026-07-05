@@ -1,6 +1,39 @@
 import { createAnonClient, createServiceClient, createUserClient, getUser } from '../../_shared/supabase.ts'
-import { jsonResponse, errorResponse, unauthorizedResponse } from '../../_shared/response.ts'
+import { jsonResponse, errorResponse } from '../../_shared/response.ts'
 import { corsHeaders } from '../../_shared/cors.ts'
+import { getEnv } from '../../_shared/env.ts'
+
+type SessionTokens = {
+  access_token: string
+  refresh_token: string
+  expires_in?: number
+}
+
+function tokenJsonBody(session: SessionTokens, extra: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    result: true,
+    token: session.access_token,
+    refresh_token: session.refresh_token,
+    ...extra,
+  })
+}
+
+/** RDBE-12: HttpOnly cookies + gleiche Attribute wie emailLogin */
+function appendSessionCookies(headers: Headers, session: SessionTokens) {
+  const secure = getEnv('COOKIE_SECURE') !== 'false'
+  const domain = getEnv('COOKIE_DOMAIN') ?? ''
+  const domainAttr = domain ? `; Domain=${domain}` : ''
+  const sameSite = getEnv('COOKIE_SAMESITE') ?? 'None'
+  const expiresIn = session.expires_in ?? 3600
+  headers.append(
+    'Set-Cookie',
+    `sb-access-token=${session.access_token}; Path=/; HttpOnly; SameSite=${sameSite}${sameSite === 'None' ? '; Secure' : (secure ? '; Secure' : '')}${domainAttr}; Max-Age=${expiresIn}`
+  )
+  headers.append(
+    'Set-Cookie',
+    `sb-refresh-token=${session.refresh_token}; Path=/; HttpOnly; SameSite=${sameSite}${sameSite === 'None' ? '; Secure' : (secure ? '; Secure' : '')}${domainAttr}; Max-Age=604800`
+  )
+}
 
 export async function handleAuthRoutes(req: Request, path: string): Promise<Response> {
   switch (path) {
@@ -16,6 +49,8 @@ export async function handleAuthRoutes(req: Request, path: string): Promise<Resp
       return await logout(req)
     case 'auth/jwt':
       return await jwtLogin(req)
+    case 'auth/refresh':
+      return await refreshTokens(req)
     default:
       if (path.match(/^auth\/\w+\/native/)) {
         return await oauthNative(req, path)
@@ -24,12 +59,23 @@ export async function handleAuthRoutes(req: Request, path: string): Promise<Resp
   }
 }
 
+async function parseBody(req: Request): Promise<Record<string, string>> {
+  const contentType = (req.headers.get('content-type') ?? '').toLowerCase()
+  if (contentType.includes('application/json')) {
+    return await req.json()
+  }
+  const text = await req.text()
+  return Object.fromEntries(new URLSearchParams(text))
+}
+
 async function emailLogin(req: Request): Promise<Response> {
   if (req.method !== 'POST') {
     return errorResponse(req, 405, 'method_not_allowed')
   }
 
-  const { email, password } = await req.json()
+  const body = await parseBody(req)
+  const email = body.email
+  const password = body.password
   if (!email || !password) {
     return errorResponse(req, 400, 'missing_fields', 'Email and password required')
   }
@@ -38,6 +84,17 @@ async function emailLogin(req: Request): Promise<Response> {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password })
 
   if (error) {
+    const ct = (req.headers.get('content-type') ?? '').toLowerCase()
+    if (!ct.includes('application/json')) {
+      const siteUrl = getEnv('SITE_URL') ?? 'http://localhost:2000'
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: `${siteUrl}/account/login?error=${encodeURIComponent(error.message)}`,
+          ...corsHeaders(req.headers.get('origin')),
+        },
+      })
+    }
     return errorResponse(req, 401, 'unauthorized', error.message)
   }
 
@@ -48,21 +105,26 @@ async function emailLogin(req: Request): Promise<Response> {
   })
 
   if (data.session) {
-    const secure = Deno.env.get('COOKIE_SECURE') !== 'false'
-    const domain = Deno.env.get('COOKIE_DOMAIN') ?? ''
-    const domainAttr = domain ? `; Domain=${domain}` : ''
-
-    headers.append(
-      'Set-Cookie',
-      `sb-access-token=${data.session.access_token}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}${domainAttr}; Max-Age=${data.session.expires_in}`
-    )
-    headers.append(
-      'Set-Cookie',
-      `sb-refresh-token=${data.session.refresh_token}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}${domainAttr}; Max-Age=604800`
-    )
+    appendSessionCookies(headers, data.session)
   }
 
-  return new Response(JSON.stringify({ result: true }), { status: 200, headers })
+  const contentType = (req.headers.get('content-type') ?? '').toLowerCase()
+  const isFormSubmit = !contentType.includes('application/json')
+
+  if (isFormSubmit) {
+    const redirect = body.redirect || '/'
+    const siteUrl = getEnv('SITE_URL') ?? 'http://localhost:2000'
+    const isAbsolute = redirect.startsWith('http://') || redirect.startsWith('https://')
+    const location = isAbsolute ? redirect : `${siteUrl}${redirect.startsWith('/') ? '' : '/'}${redirect}`
+    headers.set('Location', location)
+    return new Response(null, { status: 302, headers })
+  }
+
+  if (!data.session) {
+    return new Response(JSON.stringify({ result: true }), { status: 200, headers })
+  }
+
+  return new Response(tokenJsonBody(data.session), { status: 200, headers })
 }
 
 async function emailSignup(req: Request): Promise<Response> {
@@ -71,7 +133,7 @@ async function emailSignup(req: Request): Promise<Response> {
   }
 
   // Admin-Auth: Nur authentifizierte Admins duerfen User anlegen
-  const adminKey = Deno.env.get('ADMIN_API_KEY')
+  const adminKey = getEnv('ADMIN_API_KEY')
   const providedKey = req.headers.get('X-Admin-Key')
 
   if (!adminKey || providedKey !== adminKey) {
@@ -126,7 +188,7 @@ async function emailLost(req: Request): Promise<Response> {
 
   const supabase = createAnonClient()
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${Deno.env.get('SITE_URL') ?? 'http://localhost:3000'}/account/recover`,
+    redirectTo: `${getEnv('SITE_URL') ?? 'http://localhost:3000'}/account/recover`,
   })
 
   if (error) {
@@ -175,8 +237,11 @@ async function logout(req: Request): Promise<Response> {
     return errorResponse(req, 405, 'method_not_allowed')
   }
 
-  const client = createUserClient(req)
-  await client.auth.signOut()
+  const userClient = createUserClient(req)
+  const { data: { user } } = await userClient.auth.getUser()
+  if (user) {
+    await userClient.auth.signOut({ scope: 'global' })
+  }
 
   const origin = req.headers.get('origin')
   const headers = new Headers({
@@ -184,10 +249,12 @@ async function logout(req: Request): Promise<Response> {
     ...corsHeaders(origin),
   })
 
-  const domain = Deno.env.get('COOKIE_DOMAIN') ?? ''
+  const domain = getEnv('COOKIE_DOMAIN') ?? ''
   const domainAttr = domain ? `; Domain=${domain}` : ''
-  headers.append('Set-Cookie', `sb-access-token=; Path=/; HttpOnly; Max-Age=0${domainAttr}`)
-  headers.append('Set-Cookie', `sb-refresh-token=; Path=/; HttpOnly; Max-Age=0${domainAttr}`)
+  const sameSite = getEnv('COOKIE_SAMESITE') ?? 'None'
+  const secureAttr = sameSite === 'None' ? '; Secure' : ''
+  headers.append('Set-Cookie', `sb-access-token=; Path=/; HttpOnly; SameSite=${sameSite}${secureAttr}; Max-Age=0${domainAttr}`)
+  headers.append('Set-Cookie', `sb-refresh-token=; Path=/; HttpOnly; SameSite=${sameSite}${secureAttr}; Max-Age=0${domainAttr}`)
 
   return new Response(JSON.stringify({ result: true }), { status: 200, headers })
 }
@@ -218,13 +285,44 @@ async function jwtLogin(req: Request): Promise<Response> {
     ...corsHeaders(origin),
   })
 
-  const secure = Deno.env.get('COOKIE_SECURE') !== 'false'
-  headers.append(
-    'Set-Cookie',
-    `sb-access-token=${data.session.access_token}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}; Max-Age=${data.session.expires_in}`
-  )
+  appendSessionCookies(headers, data.session)
 
-  return new Response(JSON.stringify({ result: true }), { status: 200, headers })
+  return new Response(tokenJsonBody(data.session), { status: 200, headers })
+}
+
+async function refreshTokens(req: Request): Promise<Response> {
+  if (req.method !== 'POST') {
+    return errorResponse(req, 405, 'method_not_allowed')
+  }
+
+  let body: Record<string, unknown>
+  try {
+    body = await req.json()
+  } catch {
+    return errorResponse(req, 400, 'invalid_body', 'JSON body required')
+  }
+
+  const refresh_token = typeof body.refresh_token === 'string' ? body.refresh_token : ''
+  if (!refresh_token) {
+    return errorResponse(req, 400, 'missing_fields', 'refresh_token required')
+  }
+
+  const supabase = createAnonClient()
+  const { data, error } = await supabase.auth.refreshSession({ refresh_token })
+
+  if (error || !data.session) {
+    return errorResponse(req, 401, 'unauthorized', error?.message ?? 'Invalid or expired refresh token')
+  }
+
+  const origin = req.headers.get('origin')
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    ...corsHeaders(origin),
+  })
+
+  appendSessionCookies(headers, data.session)
+
+  return new Response(tokenJsonBody(data.session), { status: 200, headers })
 }
 
 async function oauthNative(req: Request, path: string): Promise<Response> {
@@ -262,11 +360,7 @@ async function oauthNative(req: Request, path: string): Promise<Response> {
     ...corsHeaders(origin),
   })
 
-  const secure = Deno.env.get('COOKIE_SECURE') !== 'false'
-  headers.append(
-    'Set-Cookie',
-    `sb-access-token=${data.session.access_token}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}; Max-Age=${data.session.expires_in}`
-  )
+  appendSessionCookies(headers, data.session)
 
-  return new Response(JSON.stringify({ result: true, auth: true }), { status: 200, headers })
+  return new Response(tokenJsonBody(data.session, { auth: true }), { status: 200, headers })
 }

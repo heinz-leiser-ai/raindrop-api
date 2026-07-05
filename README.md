@@ -1,80 +1,128 @@
----
-description: >-
-  Build and integrate tools and applications to help members manage their
-  bookmarks on Raindrop.io
----
+# Raindrop Self-hosted Backend
 
-# Overview
+Self-hosted Backend für das [raindrop-app](https://github.com/user/raindrop-app) Frontend, basierend auf **Supabase** (Postgres, Edge Functions, Auth, Storage).
 
-This is the official documentation for Raindrop.io API. A reference to the functionality our public API provides with detailed description of each API endpoint, parameters, and examples.
+## Stack
 
-Please note that you must [register your application](https://app.raindrop.io/settings/integrations) and authenticate with OAuth when making requests. Before doing so, be sure to read our [Terms & Guidelines](terms.md) to learn how the API may be used.
 
-### Format
+| Komponente | Technologie                                     |
+| ---------- | ----------------------------------------------- |
+| Datenbank  | PostgreSQL (Supabase)                           |
+| API        | Supabase Edge Functions (Deno)                  |
+| Auth       | Supabase Auth (Email/Password, Cookie-Sessions) |
+| Storage    | Supabase Storage (Files, Covers)                |
+| Frontend   | Vercel (`https://project-fijck.vercel.app`)     |
 
-API endpoints accept arguments either as url-encoded values for non-POST requests or as json-encoded objects encoded in POST request body with `Content-Type: application/json` header.
 
-Where possible, the API strives to use appropriate HTTP verbs for each action.
+## Features
 
-| Verb   | Description                                                |
-| ------ | ---------------------------------------------------------- |
-| GET    | Used for retrieving resources.                             |
-| POST   | Used for creating resources.                               |
-| PUT    | Used for updating resources, or performing custom actions. |
-| DELETE | Used for deleting resources.                               |
 
-This API relies on standard HTTP response codes to indicate operation result. The table below is a simple reference about the most used status codes:
+| ID      | Feature                     | Status   |
+| ------- | --------------------------- | -------- |
+| RDBE-1  | Auth (Email + Social Login) | Deployed |
+| RDBE-2  | User-Profil & Config        | Deployed |
+| RDBE-3  | Collections CRUD            | Deployed |
+| RDBE-4  | Raindrops CRUD              | Deployed |
+| RDBE-5  | Tags                        | Deployed |
+| RDBE-6  | Suche & Filter              | Deployed |
+| RDBE-7  | File Upload (Storage)       | Deployed |
+| RDBE-8  | Import / Export             | Deployed |
+| RDBE-9  | Highlights                  | Deployed |
+| RDBE-10 | Sharing & Collaboration     | Deployed |
+| RDBE-11 | Backups                     | Deployed |
 
-| Status code | Description                                                                                                                      |
-| ----------: | -------------------------------------------------------------------------------------------------------------------------------- |
-|         200 | The request was processed successfully.                                                                                          |
-|         204 | The request was processed successfully without any data to return.                                                               |
-|         4xx | The request was processed with an error and should not be retried unmodified as they won’t be processed any different by an API. |
-|         5xx | The request failed due to a server error, it’s safe to retry later.                                                              |
 
-All `200 OK` responses have the `Content-type: application/json` and contain a JSON-encoded representation of one or more objects.
+## Projektstruktur
 
-Payload of POST requests has to be JSON-encoded and accompanied with `Content-Type: application/json` header.
+```
+supabase/
+  functions/
+    _shared/           # Shared Utilities (CORS, Auth, Response)
+    api/
+      index.ts         # Haupt-Router
+      routes/
+        auth.ts        # Login, Logout, Session
+        user.ts        # Profil, Config, Stats
+        collections.ts # Collections CRUD, Sharing, Covers
+        raindrops.ts   # Bookmarks CRUD, Batch-Ops, File Upload
+        tags.ts        # Tags, Filter-Daten
+        highlights.ts  # Highlights
+        import-export.ts # Import/Export
+        backups.ts     # Backups
+  migrations/          # PostgreSQL Migrationen
+```
 
-### Timestamps <a href="#timestamps" id="timestamps"></a>
+## Setup
 
-All timestamps are returned in ISO 8601 format:
+### Voraussetzungen
+
+- [Supabase CLI](https://supabase.com/docs/guides/cli) (>= v2.78)
+- Supabase-Projekt (Cloud oder Self-hosted)
+
+### 1. Supabase Secrets setzen
 
 ```bash
-YYYY-MM-DDTHH:MM:SSZ
+supabase secrets set ALLOWED_ORIGINS="http://localhost:2000,https://project-fijck.vercel.app/"
+supabase secrets set COOKIE_SAMESITE="None"
+supabase secrets set SITE_URL="https://project-fijck.vercel.app/"
 ```
 
-### Rate Limiting <a href="#rate-limiting" id="rate-limiting"></a>
+### 2. Migrationen anwenden
 
-For requests using OAuth, you can make up to 120 requests per minute per authenticated user.
-
-The headers tell you everything you need to know about your current rate limit status:
-
-| Header name         | Description                                                                       |
-| ------------------- | --------------------------------------------------------------------------------- |
-| X-RateLimit-Limit   | The maximum number of requests that the consumer is permitted to make per minute. |
-| RateLimit-Remaining | The number of requests remaining in the current rate limit window.                |
-| X-RateLimit-Reset   | The time at which the current rate limit window resets in UTC epoch seconds.      |
-
-Once you go over the rate limit you will receive an error response:
-
-```http
-HTTP/1.1 429 Too Many Requests
-Status: 429 Too Many Requests
-X-RateLimit-Limit: 120
-X-RateLimit-Remaining: 0
-X-RateLimit-Reset: 1392321600 
+```bash
+supabase db push
 ```
 
-### CORS <a href="#cross-origin-resource-sharing" id="cross-origin-resource-sharing"></a>
+### 3. Edge Functions deployen
 
-The API supports Cross Origin Resource Sharing (CORS) for AJAX requests. You can read the [CORS W3C recommendation](https://www.w3.org/TR/cors/), or [this intro](http://code.google.com/p/html5security/wiki/CrossOriginRequestSecurity) from the HTML 5 Security Guide.
-
-Here’s a sample request sent from a browser hitting `http://example.com`:
-
-```http
-HTTP/1.1 200 OK
-Access-Control-Allow-Origin: http://example.com
-Access-Control-Expose-Headers: ETag, Content-Type, Accept, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset
-Access-Control-Allow-Credentials: true
+```bash
+supabase functions deploy api --no-verify-jwt
 ```
+
+### 4. Supabase Auth konfigurieren
+
+- Email/Password Provider aktivieren im Supabase Dashboard
+- Site URL setzen unter Authentication → URL Configuration
+- User erstellen unter Authentication → Users
+
+## API Endpoints
+
+Alle Endpoints unter `/functions/v1/api/`:
+
+
+| Methode | Pfad                       | Beschreibung         |
+| ------- | -------------------------- | -------------------- |
+| POST    | `auth/email-login`         | Email Login          |
+| GET     | `auth/logout`              | Logout               |
+| GET     | `user`                     | Aktueller User       |
+| PUT     | `user`                     | Profil updaten       |
+| GET     | `user/stats`               | User-Statistiken     |
+| GET     | `collections/all`          | Alle Collections     |
+| POST    | `collection`               | Collection erstellen |
+| PUT     | `collection/{id}`          | Collection updaten   |
+| DELETE  | `collection/{id}`          | Collection löschen   |
+| GET     | `raindrops/{collectionId}` | Bookmarks listen     |
+| POST    | `raindrop`                 | Einzelnes Bookmark   |
+| POST    | `raindrops`                | Batch-Create         |
+| PUT     | `raindrop/{id}`            | Bookmark updaten     |
+| DELETE  | `raindrop/{id}`            | Bookmark löschen     |
+| GET     | `tags/{collectionId}`      | Tags laden           |
+| GET     | `highlights/{raindropId}`  | Highlights laden     |
+
+
+## Environment Variables
+
+
+| Variable          | Beschreibung                                       |
+| ----------------- | -------------------------------------------------- |
+| `ALLOWED_ORIGINS` | Komma-getrennte erlaubte Origins für CORS          |
+| `COOKIE_SAMESITE` | Cookie SameSite-Attribut (`None` für Cross-Domain) |
+| `SITE_URL`        | Frontend-URL für Redirects nach Login              |
+
+
+## Bekannte Einschränkungen
+
+- **Screenshot-Service** (`rdl.ink`): Externer Raindrop.io-Service, nicht self-hosted. Thumbnails werden nicht generiert.
+- **Import-Redirect**: Import-Seite im Frontend verweist noch auf `app.raindrop.io`.
+- **Social Login**: OAuth-Provider (Google, Apple) müssen separat konfiguriert werden.
+

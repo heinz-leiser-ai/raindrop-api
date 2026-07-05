@@ -4,6 +4,14 @@ import { handleAuthRoutes } from './routes/auth.ts'
 import { handleUserRoutes } from './routes/user.ts'
 import { handleCollectionRoutes } from './routes/collections.ts'
 import { handleRaindropRoutes } from './routes/raindrops.ts'
+import { handleTagRoutes } from './routes/tags.ts'
+import { handleImportExportRoutes } from './routes/import-export.ts'
+import { handleHighlightRoutes } from './routes/highlights.ts'
+import { handleBackupRoutes } from './routes/backups.ts'
+import { handleThumbnailRoutes } from './routes/thumbnail.ts'
+import { handleLinkCheckRoutes } from './routes/linkCheck.ts'
+import { handleMoveJournalRoutes } from './routes/moveJournal.ts'
+import { handleHealthRoute } from './routes/health.ts'
 
 Deno.serve(async (req) => {
   const corsResponse = handleCors(req)
@@ -13,6 +21,10 @@ Deno.serve(async (req) => {
   const path = url.pathname.replace(/^\/api\/?/, '').replace(/\/$/, '')
 
   try {
+    if (path === 'health') {
+      return await handleHealthRoute(req)
+    }
+
     if (path.startsWith('auth/')) {
       return await handleAuthRoutes(req, path)
     }
@@ -21,12 +33,45 @@ Deno.serve(async (req) => {
       return await handleUserRoutes(req, path)
     }
 
-    if (path.startsWith('collection')) {
+    if (path.startsWith('collection') || path.startsWith('collaborators/')) {
       return await handleCollectionRoutes(req, path)
+    }
+
+    if (path.startsWith('highlights')) {
+      return await handleHighlightRoutes(req, path)
+    }
+
+    if (path.startsWith('import/') && !path.startsWith('import/url/parse')) {
+      return await handleImportExportRoutes(req, path)
+    }
+
+    // Export muss VOR raindrop-Route geprueft werden
+    if (path.match(/^raindrops\/.*\/export\./)) {
+      return await handleImportExportRoutes(req, path)
     }
 
     if (path.startsWith('raindrop') || path.startsWith('import/url/parse')) {
       return await handleRaindropRoutes(req, path)
+    }
+
+    if (path.startsWith('tag') || path.startsWith('filter')) {
+      return await handleTagRoutes(req, path)
+    }
+
+    if (path.startsWith('backup')) {
+      return await handleBackupRoutes(req, path)
+    }
+
+    if (path.startsWith('thumbnail/')) {
+      return await handleThumbnailRoutes(req, path)
+    }
+
+    if (path.startsWith('link-check/')) {
+      return await handleLinkCheckRoutes(req, path)
+    }
+
+    if (path.startsWith('move-journal')) {
+      return await handleMoveJournalRoutes(req, path)
     }
 
     return errorResponse(req, 404, 'not_found', `Route not found: ${path}`)
