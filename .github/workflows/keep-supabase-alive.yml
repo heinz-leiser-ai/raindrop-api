@@ -2,8 +2,8 @@ name: Keep Supabase Alive
 
 on:
   schedule:
-    # Mo + Do, 9:00 UTC — Free-Tier pausiert nach 7 Tagen Inaktivität
-    - cron: '0 9 * * 1,4'
+    # Taeglich 9:00 UTC — Supabase Free-Tier braucht regelmaessige DB-Aktivitaet
+    - cron: '0 9 * * *'
   workflow_dispatch:
 
 jobs:
@@ -13,10 +13,10 @@ jobs:
       - name: Ping Supabase
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
-            echo "Missing secrets: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in GitHub."
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "Missing secrets: SUPABASE_URL and SUPABASE_ANON_KEY must be set in GitHub."
             exit 1
           fi
 
@@ -27,22 +27,42 @@ jobs:
 
           BASE="${SUPABASE_URL%/}"
 
-          echo "Pinging REST API (profiles)..."
-          HTTP=$(curl -s -o /tmp/supabase-response.txt -w "%{http_code}" \
-            "${BASE}/rest/v1/profiles?select=id&limit=1" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}")
+          ping_endpoint() {
+            local name="$1"
+            local url="$2"
+            shift 2
 
-          echo "HTTP status: ${HTTP}"
-          cat /tmp/supabase-response.txt || true
+            echo "Pinging ${name}..."
+            HTTP=$(curl -s -o /tmp/supabase-response.txt -w "%{http_code}" "$url" "$@")
+            echo "HTTP status: ${HTTP}"
+            cat /tmp/supabase-response.txt || true
 
-          if [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ]; then
+            if [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ]; then
+              echo "${name}: OK"
+              return 0
+            fi
+
+            echo "${name}: FAILED"
+            return 1
+          }
+
+          FAILED=0
+
+          ping_endpoint "Auth health" "${BASE}/auth/v1/health" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" || FAILED=1
+
+          ping_endpoint "Database (keep_alive)" "${BASE}/rest/v1/keep_alive?select=id&limit=1" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" || FAILED=1
+
+          ping_endpoint "Edge Function (health)" "${BASE}/functions/v1/api/health" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" || FAILED=1
+
+          if [ "$FAILED" -eq 0 ]; then
             echo "Supabase keep-alive ping successful."
             exit 0
           fi
 
-          if [ "$HTTP" = "401" ] || [ "$HTTP" = "403" ]; then
-            echo "Auth failed — check SUPABASE_SERVICE_ROLE_KEY in GitHub Secrets."
-          fi
-
+          echo "One or more pings failed — check SUPABASE_URL and SUPABASE_ANON_KEY in GitHub Secrets."
           exit 1

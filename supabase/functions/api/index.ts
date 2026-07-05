@@ -11,6 +11,7 @@ import { handleBackupRoutes } from './routes/backups.ts'
 import { handleThumbnailRoutes } from './routes/thumbnail.ts'
 import { handleLinkCheckRoutes } from './routes/linkCheck.ts'
 import { handleMoveJournalRoutes } from './routes/moveJournal.ts'
+import { handleHealthRoute } from './routes/health.ts'
 
 Deno.serve(async (req) => {
   const corsResponse = handleCors(req)
@@ -20,6 +21,10 @@ Deno.serve(async (req) => {
   const path = url.pathname.replace(/^\/api\/?/, '').replace(/\/$/, '')
 
   try {
+    if (path === 'health') {
+      return await handleHealthRoute(req)
+    }
+
     if (path.startsWith('auth/')) {
       return await handleAuthRoutes(req, path)
     }
